@@ -138,7 +138,7 @@ class JiraApi(AtlassianCloud):
         """
         return self._processResponse(self._callApi("filter/my", locals()))
 
-    def filterSearch(self, filterName:str="", accountId:str=None, groupname:str=None, groupId:str=None, projectId:str=None, orderBy:str=None, expand:str=None, overrideSharePermissions:bool=False, startAt:int=None, maxResults:int=None):
+    def filterSearch(self, filterName:str=None, accountId:str=None, groupname:str=None, groupId:str=None, projectId:str=None, orderBy:str=None, expand:str=None, overrideSharePermissions:bool=False, startAt:int=None, maxResults:int=None):
         """
         Jira-Filter suchen
         https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-filters/#api-rest-api-3-filter-search-get
