@@ -63,6 +63,10 @@ class AtlassianCloud:
         headers = {
             "Accept": "application/json"
         }
+        if type(data) is dict:
+            for key in dict(data):
+                if data[key] == None:
+                    del data[key]
         return requests.request(
             method,
             self.base_url + '/' + self._api_urls[apiVersion if apiVersion != None else self._api_version] + call,
@@ -158,7 +162,12 @@ class JiraApi(AtlassianCloud):
         """
         Jira-Filter schreiben
         :param id: ID des Filters
-        :param body: Filter-Daten
+        :param name: Name des Filters
+        :param jql: jql des Filters
+        :param description: Beschreibung des Filters
+        :param favourite: Filter für aktuellen Benutzer als Favoriten markieren
+        :param sharePermissions: Betrachtungs-Freigaben, Liste von Objekten {'type':"user/group/project/projectRole/global/loggedin/project-unknown",'user':{'accountId':""},'group':{'groupId/name':""},'project':{'id':"",'email':"",'favourite':True/False},'role':{'name':"",'translatedName':"",'currentUserRole':True/False}}
+        :param editPermissions: Bearbeitungs-Freigaben, Liste von Objekten {'type':"user/group/project/projectRole/global/loggedin/project-unknown",'user':{'accountId':""},'group':{'groupId/name':""},'project':{'id':"",'email':"",'favourite':True/False},'role':{'name':"",'translatedName':"",'currentUserRole':True/False}}
         """
         data = locals()
         del data['id'], data['expand'], data['overrideSharePermissions']
@@ -189,12 +198,23 @@ class JiraApi(AtlassianCloud):
         :return:
         """
         return self._processResponsePaginated("dashboard/search", locals())
+    
+    def dashboardGet(self, id):
+        """
+        Jira-Dashboard abrufen
+        :param id: ID des Filters
+        :return:
+        """
+        return self._processResponse(self._callApi(f"dashboard/{id}"))
 
     def dashboardUpdate(self, id:int, name:str, description:str = None, sharePermissions: List[dict] = None, editPermissions: List[dict] = None):
         """
         Jira-Dashboard schreiben
         :param id: ID des Dashboards
-        :param body: Dashboard-Daten
+        :param name: Name des Dashboards
+        :param description: Beschreibung des Dashboards
+        :param sharePermissions: Betrachtungs-Freigaben, Liste von Objekten {'type':"user/group/project/projectRole/global/loggedin/project-unknown",'user':{'accountId':""},'group':{'groupId/name':""},'project':{'id':"",'email':"",'favourite':True/False},'role':{'name':"",'translatedName':"",'currentUserRole':True/False}}
+        :param editPermissions: Bearbeitungs-Freigaben, Liste von Objekten {'type':"user/group/project/projectRole/global/loggedin/project-unknown",'user':{'accountId':""},'group':{'groupId/name':""},'project':{'id':"",'email':"",'favourite':True/False},'role':{'name':"",'translatedName':"",'currentUserRole':True/False}}
         """
         data = locals()
         del data['id']
