@@ -1,4 +1,4 @@
-import requests
+import requests, time
 from typing import List, Callable
 from functools import cmp_to_key
 from requests.auth import HTTPBasicAuth
@@ -54,7 +54,15 @@ class AtlassianCloud:
             params[name.replace('_','-')] = locals[name]
         return params
     
-    def _callApi(self, call:str, params:dict = None, method = "GET", data:dict = None, apiVersion:int = None):
+    def _callApi(self, call:str, params:dict = None, method = "GET", data:dict = None, apiVersion:int|str = None):
+        """
+        API aufrufen
+        :param call: Aufruf der API (Direktive)
+        :param params: GET-Parameter
+        :param method: HTTP-Methode (GET, POST, PUT, DELETE)
+        :param data: Daten-Body
+        :param apiVersion: Angabe des API-Endpunktes (in _api_urls gespeichert)
+        """
         self._check()
         if params != None and 'self' in params and isinstance(self, AtlassianCloud):
             del params['self']
@@ -76,13 +84,52 @@ class AtlassianCloud:
             auth=self.auth
         )
 
-    def _processResponse(self, response, expectedStatusCode = 200):
+    def _processResponse(self, response:requests.Response, expectedStatusCode:int = 200, noresponse:bool=False):
+        """
+        Ergebnis verarbeiten
+        :param response: Response-Objekt
+        :param expectedStatusCode: Welcher Statuscode erwartet wird
+        :param noresponse: Ob ein Antwort-Body erwartet wird (z.B. bei DELETE wird nichts erwartet)
+        """
         try:
             if response.status_code == expectedStatusCode:
-                if expectedStatusCode == 200:
-                    return ut.loads(response.text)
-                elif expectedStatusCode == 204:
+                if noresponse or expectedStatusCode == 204:
                     return True
+                else:
+                    return ut.loads(response.text)
+            else:
+                print("API-Fehler")
+                print("HTTP-Status:",response.status_code)
+                print("Header:",ut.pretty(response.headers))
+                print("Content:",response.content.decode('utf-8'))
+                print(response.request.method, response.request.url, response.request.body, sep=' | ')
+                return None
+        except Exception as e:
+            print("Programmfehler:", e)
+            return response
+        
+    def _callSeveralProcessResponse(self, call:str, params:dict = None, method = "GET", data:dict = None, expectedStatusCode:int = 200, noresponse:bool=False, apiVersion:int|str = None, attempt:int = 1):
+        """
+        API bei Bedarf mehrfach aufrufen und Ergebnis verarbeiten (für vielfache Aufrufe, für die keine aggregierte Funktion existiert)
+        :param call: Aufruf der API (Direktive)
+        :param params: GET-Parameter
+        :param method: HTTP-Methode (GET, POST, PUT, DELETE)
+        :param data: Daten-Body
+        :param expectedStatusCode: Welcher Statuscode erwartet wird
+        :param noresponse: Ob ein Antwort-Body erwartet wird (z.B. bei DELETE wird nichts erwartet)
+        :param apiVersion: Angabe des API-Endpunktes (in _api_urls gespeichert)
+        """
+        response = self._callApi(call, params, method, data, apiVersion)
+        try:
+            if response.status_code == expectedStatusCode:
+                if noresponse or expectedStatusCode == 204:
+                    return True
+                else:
+                    return ut.loads(response.text)
+            elif response.status_code in (401, 404) and response.content.decode('utf-8') == '{"errorMessage": "Site temporarily unavailable"}' and attempt < 5:
+                print('.')
+                time.sleep(5)
+                return self._callSeveralProcessResponse(call, params, method, data, expectedStatusCode, noresponse, apiVersion, attempt+1)
             else:
                 print("API-Fehler")
                 print("HTTP-Status:",response.status_code)
@@ -100,28 +147,40 @@ class JiraApi(AtlassianCloud):
         super().__init__(username, apikey, base_url)
         self._api_urls = {
             3: "rest/api/3/",
-            2: "rest/api/2/"
+            2: "rest/api/2/",
+            'agile': 'rest/agile/1.0/',
+            'greenhopper': 'rest/greenhopper/1.0/'
             }
         self._api_version = 3
 
-    def _processResponsePaginated(self, call:str, params:dict = None, resultsKey:str="values"):
+    def _processResponsePaginated(self, call:str, params:dict = None, resultsKey:str="values", subobject:str=None, apiVersion:int|str = None):
+        """
+        Ergebnisse seitenweise abrufen
+        :param call: API-Call
+        :param params: Parameter des API-Calls
+        :param resultsKey: In welchem Key werden die Ergebnisse aufgelistet
+        :param subobject: Falls angegeben, in welchem Unterobjekt ist das Ergebnis-Array
+        :param apiVersion: Angabe des API-Endpunktes (in _api_urls gespeichert)
+        """
         start = 0 if "startAt" not in params else (params["startAt"] if params["startAt"]!= None else 0)
         limit = None if "maxResults" not in params else params["maxResults"]
-        results = self._processResponse(self._callApi(call, params))
+        results = self._processResponse(self._callApi(call, params, apiVersion=apiVersion))
         if results == None:
             return None
         else:
-            for result in getattr(results, resultsKey):
+            resultarray = results if subobject == None else getattr(results, subobject)
+            for result in getattr(resultarray, resultsKey):
                 yield result
         while results != None and results.startAt+results.maxResults < results.total and (limit == None or results.startAt+results.maxResults < start+limit):
             params["startAt"] = results.startAt+results.maxResults
             if limit != None and params['startAt']+results.maxResults > limit:
                 params['maxResults'] = results.maxResults - (params['startAt']+results.maxResults - limit)
-            results = self._processResponse(self._callApi(call, params))
+            results = self._processResponse(self._callApi(call, params, apiVersion=apiVersion))
             if results == None:
                 return None
             else:
-                for result in getattr(results, resultsKey):
+                resultarray = results if subobject == None else getattr(results, subobject)
+                for result in getattr(resultarray, resultsKey):
                     yield result
 
 
@@ -133,6 +192,96 @@ class JiraApi(AtlassianCloud):
         :return:
         """
         return self._processResponse(self._callApi("user", locals()))
+    
+    def userGroups(self, accountId:str):
+        """
+        Benutzergruppen zu einem Jira-User ausgeben
+        :param accountId: accountId des abgefragten Benutzers
+        :return:
+        """
+        return self._processResponse(self._callApi("user/groups", locals()))
+    
+    def groupCreate(self, name:str, withUsersAdd:List[str]=None):
+        """
+        Neue Benutzergruppe erzeugen
+        :param name: Name der neuen Gruppe
+        :param description: Beschreibung der neuen Gruppe
+        :param withUsersAdd: Liste der anzufügenden Benutzer (accountId)
+        """
+        data = locals()
+        del data['withUsersAdd']
+        group = self._processResponse(self._callApi("group",method="POST",data=data),201)
+        if len(withUsersAdd)>0:
+            for accountId in withUsersAdd:
+                self.groupUserAdd(accountId,group.groupId)
+        return group
+    
+    def groupRemove(self, groupId:str=None, groupname:str=None, swapGroupId:str=None, swapGroup:str=None):
+        """
+        Benutzergruppe löschen
+        :param groupId: ID der Gruppe
+        :param groupname: Name der Gruppe [deprecated]
+        :param swapGroupId: ID der Gruppe, zu der die bestehenden Berechtigungen/Beschränkungen übertragen werden sollen
+        :param swapGroup: Name der Gruppe, zu der die bestehenden Berechtigungen/Beschränkungen übertragen werden sollen [deprecated]
+        """
+        if groupId == None and groupname == None:
+            raise ValueError('groupId oder groupname sollen gesetzt sein')
+        params = locals()
+        return self._processResponse(self._callApi("group",self._params(params),"DELETE"),noresponse=True)
+        
+
+    def groupSearch(self, query:str=None, excludeId:List[str]=None, exclude:List[str]=None, caseInsensitive:bool=False, maxResults:int=None):
+        """"
+        Nach Benutzergruppen suchen
+        :param query: Zeichenfolge, die im Gruppennamen vorhanden sein muss
+        :param excludeId: Liste der Gruppen-IDs, die zu ignorieren sind
+        :param exclude: Liste der Gruppen-Namen die zu ignorieren sind [deprecated]
+        :param caseInsensitive: Query beachtet keine Groß-/Kleinschreibung
+        :param maxResults: Limit der Ergebnisse
+        """
+        params = locals()
+        return self._processResponse(self._callApi("groups/picker",params))
+    
+    def groupMember(self, groupId:str=None, groupname:str=None, includeInactiveUsers:bool=False, maxResults:int=None):
+        if groupId == None and groupname == None:
+            raise ValueError('groupId oder groupname sollen gesetzt sein')
+        """
+        Mitglieder einer Benutzergruppe ausgeben
+        :param groupId: ID der Gruppe
+        :param groupname: Name der Gruppe [deprecated]
+        :param includeInactiveUsers: Inaktive Benutzer mit aufzählen
+        :param maxResults: Limit für Benutzer-Ergebnis-Liste
+        :return:
+        """
+        yield from self._processResponsePaginated("group/member", locals())
+    
+    def groupUserAdd(self, accountId:str, groupId:str=None, groupname:str=None):
+        if groupId == None and groupname == None:
+            raise ValueError('groupId oder groupname sollen gesetzt sein')
+        """
+        Mitglieder einer Benutzergruppe ausgeben
+        :param accountId: Account-ID des Benutzers, der hinzugefügt werden soll
+        :param groupId: ID der Gruppe
+        :param groupname: Name der Gruppe [deprecated]
+        :return:
+        """
+        params = locals()
+        data = {'accountId':params['accountId']}
+        del params['accountId']
+        return self._processResponse(self._callApi("group/user",self._params(params),"POST",data),201)
+    
+    def groupUserDel(self, accountId:str, groupId:str=None, groupname:str=None):
+        if groupId == None and groupname == None:
+            raise ValueError('groupId oder groupname sollen gesetzt sein')
+        """
+        Mitglieder einer Benutzergruppe ausgeben
+        :param accountId: Account-ID des Benutzers, der hinzugefügt werden soll
+        :param groupId: ID der Gruppe
+        :param groupname: Name der Gruppe [deprecated]
+        :return:
+        """
+        params = locals()
+        return self._processResponse(self._callApi("group/user",self._params(params),"DELETE"),noresponse=True)
 
 
     def filterMy(self, expand:str=None, includeFavourites:bool=False):
@@ -183,6 +332,19 @@ class JiraApi(AtlassianCloud):
         return self._processResponse(self._callApi(f"filter/{id}/owner",method="PUT", data={"accountId":accountId}), 204)
     
 
+    def agileBoards(self, name:str=None, maxResults:int=None):
+        """
+        Sämtliche Software/Agile-Boards auflisten
+        :param name: Teilstring des Board-Namens
+        """
+        yield from self._processResponsePaginated('board',locals(),apiVersion='agile')
+
+    def agileBoardConfig(self, id:int):
+        """
+        Board-Konfiguration auslesen
+        :param id: ID des Boards
+        """
+        return self._callSeveralProcessResponse(f"rapidviewconfig/editmodel.json?rapidViewId={id}&cardLayoutConfig=false",apiVersion='greenhopper')
 
         
     def dashboard(self, filter:str=None, startAt:int=None, maxResults:int=None):

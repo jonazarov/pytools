@@ -61,7 +61,6 @@ class Utils:
     def log(current_filename: str):
         now = time.localtime()
         logfilename = current_filename + time.strftime(".%Y-%m-%d.log", now)
-        print(logfilename)
         logfile = codecs.open(logfilename, 'a', encoding='utf-8')
         logfile.write("NewLogEntry "+time.strftime("%Y-%m-%d %H:%M:%S", now) + "\n")
         sys.stdout = Unbuffered(logfile, sys.stdout)
