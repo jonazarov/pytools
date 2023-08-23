@@ -1,4 +1,5 @@
 import requests, time
+from bs4 import BeautifulSoup as bs
 from typing import List, Callable
 from functools import cmp_to_key
 from requests.auth import HTTPBasicAuth
@@ -149,7 +150,8 @@ class JiraApi(AtlassianCloud):
             3: "rest/api/3/",
             2: "rest/api/2/",
             'agile': 'rest/agile/1.0/',
-            'greenhopper': 'rest/greenhopper/1.0/'
+            'greenhopper': 'rest/greenhopper/1.0/',
+            'admin': 'secure/admin/'
             }
         self._api_version = 3
 
@@ -345,6 +347,20 @@ class JiraApi(AtlassianCloud):
         :param id: ID des Boards
         """
         return self._callSeveralProcessResponse(f"rapidviewconfig/editmodel.json?rapidViewId={id}&cardLayoutConfig=false",apiVersion='greenhopper')
+    
+    def agileBoardAdminSet(self, id:int, userKeys:List[str], groupKeys:List[str]):
+        """
+        Board-Konfiguration auslesen
+        :param id: ID des Boards
+        """
+        data = {
+            'id':id,
+            'boardAdmins':{
+                'userKeys':userKeys,
+                'groupKeys':groupKeys
+            }
+        }
+        return self._callSeveralProcessResponse(f"rapidviewconfig/boardadmins",method="PUT",data=data,apiVersion='greenhopper')
 
         
     def dashboard(self, filter:str=None, startAt:int=None, maxResults:int=None):
@@ -382,6 +398,49 @@ class JiraApi(AtlassianCloud):
         del data['id']
         return self._processResponse(self._callApi(f"dashboard/{id}",method="PUT", data=data))
     
+    def dashboardOwner(self, accountId: str, dashboardId: int):
+        """
+        Jira-Dashboard Owner ändern
+        """
+        self._check()
+        response1 = requests.get(
+            f"{self.base_url}/secure/admin/dashboards/ViewSharedDashboards.jspa",
+            auth=self.auth,
+        )
+        soup = bs(response1.text, "lxml")
+        atl_token = soup.find("meta", id="atlassian-token").attrs["content"]
+        response = requests.request(
+            "POST",
+            f"{self.base_url}/secure/admin/dashboards/ChangeSharedDashboardOwner.jspa",
+            data={
+                "owner": accountId,
+                "dashboardId": dashboardId,
+                "inline": True,
+                "decorator": "dialog",
+                "searchName": None,
+                "searchOwnerUserName": None,
+                "sortColumn": None,
+                "sortAscending": None,
+                "pagingOffset": None,
+                "totalResultCount": None,
+                "showTrashList": False,
+                "trashSortColumn": None,
+                "trashSortAscending": None,
+                "trashPagingOffset": None,
+                "totalTrashResultCount": -1,
+                "returnUrl": "ViewSharedDashboards.jspa",
+                "atl_token": atl_token,
+            },
+            headers={
+                "Accept": "text/html, */*; q=0.01",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "Origin": "https://smo.atlassian.net",
+            },
+            cookies=response1.cookies,
+            auth=self.auth,
+        )
+        return self._processResponse(response,noresponse=True)
 
 class ConfluenceApi(AtlassianCloud):
     def __init__(self, username: str, apikey: str, base_url: str = None) -> None:
