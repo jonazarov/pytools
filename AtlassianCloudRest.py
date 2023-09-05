@@ -148,7 +148,7 @@ class AtlassianCloud:
             print("Programmfehler:", e)
             return response
         
-    def _processResponsePaginated(self, call:str, params:dict = None, resultsKey:str="values", subobject:str=None, apiVersion:int|str = None, catchCodes:List[int]=None, catchClosure=None):
+    def _processResponsePaginated(self, call:str, params:dict = None, resultsKey:str="values", subobject:str=None, apiVersion:int|str = None, catchCodes:List[int]=None, catchClosure=None, method:str="GET", data:dict=None):
         '''
         Ergebnisse seitenweise abrufen
         :param call: API-Call
@@ -158,10 +158,12 @@ class AtlassianCloud:
         :param apiVersion: Angabe des API-Endpunktes (in _api_urls gespeichert)
         :param catchCodes: Liste der HHTP-Codes, für die eine Fehlerbehandlung vorgesehen ist.
         :param catchClosure: Funktion (nimmt im ersten Parameter das request-Objekt entgegen) für Fehlerbehandlung
+        :param method: HTTP-Methode
+        :param data: Request-Body
         '''
         start = 0 if "startAt" not in params else (params["startAt"] if params["startAt"]!= None else 0)
         limit = None if "maxResults" not in params else params["maxResults"]
-        results = self._processResponse(self._callApi(call, params, apiVersion=apiVersion), catchCodes=catchCodes, catchClosure=catchClosure)
+        results = self._processResponse(self._callApi(call, params, apiVersion=apiVersion, method=method, data=data), catchCodes=catchCodes, catchClosure=catchClosure)
         if results == None:
             return None
         else:
@@ -172,7 +174,7 @@ class AtlassianCloud:
             params["startAt"] = results.startAt+results.maxResults
             if limit != None and params['startAt']+results.maxResults > limit:
                 params['maxResults'] = results.maxResults - (params['startAt']+results.maxResults - limit)
-            results = self._processResponse(self._callApi(call, params, apiVersion=apiVersion), catchCodes=catchCodes, catchClosure=catchClosure)
+            results = self._processResponse(self._callApi(call, params, apiVersion=apiVersion, method=method, data=data), catchCodes=catchCodes, catchClosure=catchClosure)
             if results == None:
                 return None
             else:
@@ -725,7 +727,7 @@ class AssetsApi(AtlassianCloud):
         Listet alle Objektschemata auf
         :return: Iterable[Array von Objektschema-Objekten]
         '''
-        return self._processResponsePaginated('objectschema/list', locals())
+        yield from self._processResponsePaginated('objectschema/list', locals())
     
     def objectschemaGet(self, id:str):
         '''
@@ -811,3 +813,13 @@ class AssetsApi(AtlassianCloud):
             }
         }
         return self._processResponse(self._callDirect(f'config/role/{roleId}',method='PUT',data=data,apiVersion='assets'))
+    
+    def objectAql(self, qlQuery:str, includeAttributes:bool=True, maxResults:int=25) -> Iterable:
+        '''
+        Objekte anhand einer AQL abrufen
+        :param qlQuery: AQL
+        :param includeAttributes: Objekt-Attribute mit anzeigen
+        :param maxResults: Wie viele Ergebnisse sollen angezeigt werden
+        :return: Iterable[Objekte]
+        '''
+        yield from self._processResponsePaginated('object/aql',locals(),data={'qlQuery':qlQuery}, method="POST")
