@@ -3,6 +3,8 @@ from types import SimpleNamespace
 
 class NamespaceEncoder(json.JSONEncoder):
     def default(self, o):
+        if isinstance(o, (list, tuple)):
+            return super(NamespaceEncoder,self).iterencode(o)
         return o.__dict__ 
     
 import codecs, sys, time
@@ -50,7 +52,7 @@ class Utils:
         return json.load(file, object_hook= lambda x: SimpleNamespace(**x))
 
     def normalize(data: dict | list | str) -> dict | list | str:
-        return json.loads(json.dumps(data, cls=NamespaceEncoder)) if type(data) is SimpleNamespace or type(data) is list else data
+        return json.loads(json.dumps(data, cls=NamespaceEncoder))
     
     def simplifize(data: dict | list | str | int) -> SimpleNamespace:
         return Utils.loads(Utils.dumps(data))
