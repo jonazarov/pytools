@@ -58,6 +58,22 @@ class AtlassianCloud:
             params[name.replace('_','-')] = locals[name]
         return params
     
+    def _callGui(self, url):
+        '''
+        GUI aufrufen
+        :param url: URL zur GUI (nach Base-URL)
+        :return: (Im Erfolgsfall ein beautiful-soap Objekt, andernfalls None) und das response-Objekt
+        '''
+        self._check()
+        response = requests.get(
+            f"{self.base_url}/{url}",
+            auth=self.auth,
+        )
+        if response.status_code == 200:
+            return bs(response.text, "lxml"), response
+        else:
+            return None, response
+
     def _callApi(self, call:str, params:dict = None, method = "GET", data:dict = None, apiVersion:int|str = None, alternateBase:str=None):
         '''
         API aufrufen
@@ -102,6 +118,8 @@ class AtlassianCloud:
                     return ut.loads(response.text)
             elif catchCodes != None and catchClosure != None and response.status_code in catchCodes:
                 return catchClosure(response)
+            elif catchCodes != None and response.status_code in catchCodes:
+                raise objectNotExists()
             else:
                 print("API-Fehler")
                 print("HTTP-Status:",response.status_code)
@@ -203,6 +221,24 @@ class JiraApi(AtlassianCloud):
         :return:
         '''
         return self._processResponse(self._callApi("user", locals()))
+    
+    def userSearch(self, accountId:str=None, query:str=None):
+        '''
+        Nach Jira-User suchen
+        :param accountId: accountId des abgefragten Benutzers
+        :param username: 
+        :return:
+        '''
+        return self._processResponse(self._callApi("user/search", locals()))
+    
+    def usersGetByName(self, displayName:str=None):
+        '''
+        Nach Jira-User anhand des displayNamens suchen
+        :param displayName:
+        :return:
+        '''
+        users = self.userSearch(query=displayName)
+        return list(filter(lambda u: u.displayName == displayName, users))
     
     def userGroups(self, accountId:str):
         '''
@@ -360,7 +396,10 @@ class JiraApi(AtlassianCloud):
         :param id: ID des Filters
         :return:
         '''
-        return self._processResponse(self._callApi(f"filter/{id}"))
+        try:
+            return self._processResponse(self._callApi(f"filter/{id}"), catchCodes=[400])
+        except objectNotExists:
+            return None
         
     def filterUpdate(self, id:int, name:str, jql:str=None, description:str = None, favourite:bool = None, sharePermissions: List[dict] = None, editPermissions: List[dict] = None, expand:str=None, overrideSharePermissions:bool=False):
         '''
@@ -380,9 +419,9 @@ class JiraApi(AtlassianCloud):
     
     def filterOwner(self, id, accountId):
         '''
-        Owner eines Jira-Filters setzen
+        Eigentümer eines Jira-Filters setzen
         :param id: ID des Filters
-        :param body: Filter-Daten
+        :param accountId: accountId des neuen Eigentümers
         '''
         return self._processResponse(self._callApi(f"filter/{id}/owner",method="PUT", data={"accountId":accountId}), 204)
     
@@ -438,7 +477,10 @@ class JiraApi(AtlassianCloud):
         :param id: ID des Filters
         :return:
         '''
-        return self._processResponse(self._callApi(f"dashboard/{id}"))
+        try:
+            return self._processResponse(self._callApi(f"dashboard/{id}"), catchCodes=[404])
+        except objectNotExists:
+            return None
 
     def dashboardUpdate(self, id:int, name:str, description:str = None, sharePermissions: List[dict] = None, editPermissions: List[dict] = None):
         '''
@@ -453,18 +495,120 @@ class JiraApi(AtlassianCloud):
         del data['id']
         return self._processResponse(self._callApi(f"dashboard/{id}",method="PUT", data=data))
     
+    def _proceedAdminList(self, tr):
+        tds = list(tr.find_all('td'))
+        name = ''.join(list(tds[0].stripped_strings))
+        ownerName = ''.join(list(tds[1].stripped_strings))
+        if ownerName in ('None', 'Keine'):
+            ownerName = []
+        perms = {}
+        permissions = {}
+        permissions['sharable'] = tds[2]
+        permissions['editable'] = tds[3]
+        for perm in permissions:
+            perms[perm] = []
+            if permissions[perm].find('li', {'class': 'private'}):
+                continue
+            for ul in permissions[perm].find_all('ul'):
+                if 'id' in ul.attrs and 'list_summary' in ul.attrs['id']:
+                    continue
+                for li in ul.find_all('li', {'class': 'public'}):
+                    if li.attrs['title'] in ('Freigegeben für angemeldete Benutzer','Shared with logged-in users'):
+                        perms[perm].append({'type':'loggedin'})
+                        continue
+                    type = str(li.contents[1].string)
+                    inhalt = str(li.contents[2]).strip(':').strip()
+                    inhalt = inhalt.replace('(ANZEIGEN)','').replace('(VIEW)','').replace('(BEARBEITEN)','').replace('(EDIT)','').strip()
+                    if type in ('Benutzer', 'User'):
+                        perms[perm].append({'type':'user','user':{'displayName':inhalt}})
+                    elif type in ('Projekt', 'Project'):
+                        perms[perm].append({'type':'project','project':{'name':inhalt}})
+                    elif type in ('Gruppe', 'Group'):
+                        perms[perm].append({'type':'group','group':{'name':inhalt}})
+                    else:
+                        perms[perm].append({'type':'unbekannt','inhalt':inhalt})
+        yield ut.simplifize({
+            "id": tr.attrs['id'][3:],
+            "name": name,
+            "owner": {"displayName": ownerName},
+            "sharePermissions": perms['editable'],
+            "editPermissions": perms['editable'],
+            "isWritable": False
+            })
+    
+    def filterAdminlist(self, limit:int|None = None, includeTrash:bool=False, skipRestable:bool=False):
+        def startsWithMf(id):
+            return id.startswith('mf_')
+        offsets = {'browse': 0}
+        if includeTrash:
+            offsets['trash_browse'] = 0
+        count = 0
+        while True:
+            soup, resp = self._callGui('secure/admin/filters/ViewSharedFilters.jspa?pagingOffset='+str(offsets['browse'])+'&trashPagingOffset='+str(offsets['trash_browse'] if 'trash_browse' in offsets else 0)+f'&showTrashList={includeTrash}')
+            for typ in offsets:
+                if limit != None and count >= limit:
+                    break
+                if offsets[typ] == -1:
+                    continue
+                if soup.find('table', id=f'mf_{typ}'):
+                    for tr in soup.find('table', id=f'mf_{typ}').find('tbody').find_all('tr', id=startsWithMf):
+                        if limit != None and count >= limit:
+                            break
+                        filt = self.filterGet(tr.attrs['id'][3:])
+                        if filt != None:
+                            if skipRestable:
+                                continue
+                            yield filt
+                            count += 1
+                        else:
+                            yield from self._proceedAdminList(tr)
+                            count += 1
+                else:
+                    offsets[typ] = -1
+                    continue
+                offsets[typ] += 1
+            if offsets['browse'] == -1 and ('trash_browse' not in offsets or offsets['trash_browse'] == -1):
+                break
+
+    def dashboardAdminlist(self, limit:int|None = None, includeTrash:bool=False, skipRestable:bool=False):
+        def startsWithPp(id):
+            return id.startswith('pp_')
+        offsets = {'browse': 0}
+        if includeTrash:
+            offsets['trash_browse'] = 0
+        count = 0
+        while True:
+            soup, resp = self._callGui('secure/admin/dashboards/ViewSharedDashboards.jspa?pagingOffset='+str(offsets['browse'])+'&trashPagingOffset='+str(offsets['trash_browse'] if 'trash_browse' in offsets else 0)+f'&showTrashList={includeTrash}')
+            for typ in offsets:
+                if limit != None and count >= limit:
+                    break
+                if offsets[typ] == -1:
+                    continue
+                try:
+                    for tr in soup.find('table', id=f'pp_{typ}').find('tbody').find_all('tr', id=startsWithPp):
+                        dashb = self.dashboardGet(tr.attrs['id'][3:])
+                        if dashb != None:
+                            if skipRestable:
+                                continue
+                            yield dashb
+                            count += 1
+                        else:
+                            yield from self._proceedAdminList(tr)
+                            count += 1
+                except:
+                    offsets[typ] = -1
+                    continue
+                offsets[typ] += 1
+            if offsets['browse'] == -1 and ('trash_browse' not in offsets or offsets['trash_browse'] == -1):
+                break
+    
     def dashboardOwner(self, dashboardId: int, accountId: str):
         '''
         Jira-Dashboard Owner ändern
         :param dashboardId: ID des zu übereignenden Dashboards
         :param accountId: accountId des neuen Eigentümers
         '''
-        self._check()
-        response1 = requests.get(
-            f"{self.base_url}/secure/admin/dashboards/ViewSharedDashboards.jspa",
-            auth=self.auth,
-        )
-        soup = bs(response1.text, "lxml")
+        soup, resp = self._callGui('secure/admin/dashboards/ViewSharedDashboards.jspa')
         atl_token = soup.find("meta", id="atlassian-token").attrs["content"]
         response = requests.request(
             "POST",
@@ -494,7 +638,7 @@ class JiraApi(AtlassianCloud):
                 "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
                 "Origin": "https://smo.atlassian.net",
             },
-            cookies=response1.cookies,
+            cookies=resp.cookies,
             auth=self.auth,
         )
         return self._processResponse(response,noresponse=True)

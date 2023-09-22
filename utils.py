@@ -26,6 +26,12 @@ class Unbuffered:
         pass    
 
 def confunpack(confdef: dict, config: dict) -> dict:
+    '''
+    Befüllt ein Config-Dict anhand einer conf-Definition aus einer Config-File sowie aus Input-Eingaben
+    :param condef: Config-Definition
+    :param config: Dict aus Config-File
+    :return: Neues Config-Dict
+    '''
     for entry in confdef:
         if type(confdef[entry]) is str:
             if not entry in config:
@@ -38,6 +44,9 @@ def confunpack(confdef: dict, config: dict) -> dict:
 
 class Utils:
     def pretty(data: dict | list | str, sort_keys:bool=True, indent:bool|None = 4) -> json:
+        '''
+        Gibt beliebige Dicts/Lists/Tupel etc. formatiert aus
+        '''
         try:
             data2 = data.decode('utf-8')
             return data2
@@ -46,15 +55,27 @@ class Utils:
         return json.dumps(data, sort_keys=sort_keys, indent=indent, ensure_ascii=False, separators=(",", ": "), cls=NamespaceEncoder)
     
     def loads(data: json) -> SimpleNamespace:
+        '''
+        Lädt ein JSON-String in SimpleNamespace
+        '''
         return json.loads(data, object_hook= lambda x: SimpleNamespace(**x))
     
     def load(file) -> SimpleNamespace:
+        '''
+        Lädt eine JSON-Datei in SimpleNamespace
+        '''
         return json.load(file, object_hook= lambda x: SimpleNamespace(**x))
 
     def normalize(data: dict | list | str) -> dict | list | str:
+        '''
+        Verwandelt ein SimpleNamespace-Objekt in normale Python-Größen
+        '''
         return json.loads(json.dumps(data, cls=NamespaceEncoder))
     
     def simplifize(data: dict | list | str | int) -> SimpleNamespace:
+        '''
+        Verwandelt normale Python-Größen in SimpleNamespace
+        '''
         return Utils.loads(Utils.dumps(data))
     
     def dumps(data: dict | list | str | int) -> json:
