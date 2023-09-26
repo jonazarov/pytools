@@ -540,12 +540,12 @@ class JiraApi(AtlassianCloud):
             "isWritable": False
             })
     
-    def filterAdminlist(self, limit:int|None = None, includeTrash:bool=False, skipRestable:bool=False):
+    def filterAdminlist(self, limit:int|None = None, includeTrash:bool=False, skipRestable:bool=False, pagingOffset:int=0):
         def startsWithMf(id):
             return id.startswith('mf_')
-        offsets = {'browse': 0}
+        offsets = {'browse': pagingOffset}
         if includeTrash:
-            offsets['trash_browse'] = 0
+            offsets['trash_browse'] = pagingOffset
         count = 0
         while True:
             soup, resp = self._callGui('secure/admin/filters/ViewSharedFilters.jspa?pagingOffset='+str(offsets['browse'])+'&trashPagingOffset='+str(offsets['trash_browse'] if 'trash_browse' in offsets else 0)+f'&showTrashList={includeTrash}')
