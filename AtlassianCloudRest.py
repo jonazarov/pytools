@@ -423,7 +423,11 @@ class JiraApi(AtlassianCloud):
         :param id: ID des Filters
         :param accountId: accountId des neuen Eigentümers
         '''
-        return self._processResponse(self._callApi(f"filter/{id}/owner",method="PUT", data={"accountId":accountId}), 204)
+        def errors(response: requests.Response):
+            if (response.status_code == 400 and response.content and ut.loads(response.content.decode('utf-8')).errorMessages[0] == 'The user already owns a filter with the same name.'):
+                return -1
+
+        return self._processResponse(self._callApi(f"filter/{id}/owner",method="PUT", data={"accountId":accountId}), 204, catchCodes=[400], catchClosure=errors)
     
 
     def agileBoards(self, name:str=None, maxResults:int=None):
