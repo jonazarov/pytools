@@ -569,6 +569,8 @@ class JiraApi(AtlassianCloud):
                 offsets[typ] += 1
             if offsets['browse'] == -1 and ('trash_browse' not in offsets or offsets['trash_browse'] == -1):
                 break
+            if limit != None and count >= limit:
+                    break
 
     def dashboardAdminlist(self, limit:int|None = None, includeTrash:bool=False, skipRestable:bool=False):
         def startsWithPp(id):
@@ -586,6 +588,8 @@ class JiraApi(AtlassianCloud):
                     continue
                 try:
                     for tr in soup.find('table', id=f'pp_{typ}').find('tbody').find_all('tr', id=startsWithPp):
+                        if limit != None and count >= limit:
+                            break
                         dashb = self.dashboardGet(tr.attrs['id'][3:])
                         if dashb != None:
                             if skipRestable:
@@ -601,6 +605,8 @@ class JiraApi(AtlassianCloud):
                 offsets[typ] += 1
             if offsets['browse'] == -1 and ('trash_browse' not in offsets or offsets['trash_browse'] == -1):
                 break
+            if limit != None and count >= limit:
+                    break
     
     def dashboardOwner(self, dashboardId: int, accountId: str):
         '''
