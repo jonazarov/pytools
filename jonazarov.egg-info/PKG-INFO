@@ -1,0 +1,15 @@
+Metadata-Version: 2.1
+Name: jonazarov
+Version: 0.1.0
+Summary: Verschiedene Python-Tools, vor allem für Atlassian Cloud
+Home-page: https://github.com/jonazarov/pytools
+Author: Johannes Nazarov
+Author-email: johannes.nazarov+dev@gmail.com
+License: GNU
+Classifier: Development Status :: 1 - Planning
+Classifier: Intended Audience :: Science/Research
+Classifier: License :: OSI Approved :: GNU General Public License (GPL)
+Classifier: Natural Language :: German
+Classifier: Operating System :: Microsoft :: Windows :: Windows 11
+Classifier: Programming Language :: Python
+License-File: LICENSE

@@ -1,0 +1,10 @@
+LICENSE
+setup.py
+jonazarov/AtlassianCloudRest.py
+jonazarov/__init__.py
+jonazarov/utils.py
+jonazarov.egg-info/PKG-INFO
+jonazarov.egg-info/SOURCES.txt
+jonazarov.egg-info/dependency_links.txt
+jonazarov.egg-info/requires.txt
+jonazarov.egg-info/top_level.txt
