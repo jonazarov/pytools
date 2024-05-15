@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: jonazarov
-Version: 0.1.5
+Version: 0.1.6
 Summary: Verschiedene Python-Tools, vor allem für Atlassian Cloud
 Home-page: https://github.com/jonazarov/pytools
 Author: Johannes Nazarov
@@ -15,3 +15,4 @@ Classifier: Programming Language :: Python
 License-File: LICENSE
 Requires-Dist: requests>=2.31.0
 Requires-Dist: bs4>=0.0.1
+Requires-Dist: lxml>=5.2.2
