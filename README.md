@@ -15,5 +15,5 @@ deploy.bat
 # Wenn alles funktioniert, Upload ins produktive pypi
 upload.bat
 # Installation der produktiven Packages
-pip install jonazarov
+pip install jonazarov -U
 ```

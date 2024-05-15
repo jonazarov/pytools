@@ -82,8 +82,8 @@ class Utils:
         return json.dumps(Utils.normalize(data))
     
     def log(current_filename: str|None = None):
-        if configfile == None:
-            configfile = pathlib.Path(inspect.stack()[1][1]).resolve()
+        if current_filename == None:
+            current_filename = pathlib.Path(inspect.stack()[1][1]).resolve()
         now = time.localtime()
         logfilename = current_filename + time.strftime(".%Y-%m-%d.log", now)
         logfile = codecs.open(logfilename, 'a', encoding='utf-8')
