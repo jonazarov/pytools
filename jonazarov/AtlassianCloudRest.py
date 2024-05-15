@@ -42,20 +42,20 @@ def loadAtlassianAuth(configfile=None):
             config = ut.normalize(config)
             del config['orgadmin']
             with open(configfile, "w") as file:
-                json.dump(config, file, indent=3)
+                json.dump(config, file, ensure_ascii=False, indent=3)
             return loadAtlassianAuth(configfile)
     except objectNotExists as e:
         print('Die angegebene Cloud-Instanz kann nicht erreicht werden! Bitte Eingaben wiederholen!')
         config = ut.normalize(config)
         del config['base_urls']
-        with open(configfile, "w") as file:
+        with open(configfile, "w", encoding="utf-8") as file:
             json.dump(config, file, indent=3)
         return loadAtlassianAuth(configfile)
     _config = ut.normalize(config)
     _config['orgadmin']['accountId'] = u[0].accountId
     config = ut.simplifize(_config)
-    with open(configfile, "w") as file:
-        json.dump(ut.normalize(config), file, indent=3)
+    with open(configfile, "w", encoding="utf-8") as file:
+        json.dump(ut.normalize(config), file, ensure_ascii=False, indent=3)
     return config
 
 class objectNotExists(Exception):

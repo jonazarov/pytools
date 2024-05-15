@@ -1,4 +1,4 @@
-import json
+import json, pathlib, inspect
 from types import SimpleNamespace
 
 class NamespaceEncoder(json.JSONEncoder):
@@ -81,7 +81,9 @@ class Utils:
     def dumps(data: dict | list | str | int) -> json:
         return json.dumps(Utils.normalize(data))
     
-    def log(current_filename: str):
+    def log(current_filename: str|None = None):
+        if configfile == None:
+            configfile = pathlib.Path(inspect.stack()[1][1]).resolve()
         now = time.localtime()
         logfilename = current_filename + time.strftime(".%Y-%m-%d.log", now)
         logfile = codecs.open(logfilename, 'a', encoding='utf-8')
@@ -90,7 +92,7 @@ class Utils:
 
     def getconfig(confdef: dict, conffile: str) -> SimpleNamespace:
         config = {}
-        with open(conffile, "r") as file:
+        with open(conffile, "r", encoding="utf-8") as file:
             try:
                 config = json.load(file)
             except:

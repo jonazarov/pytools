@@ -1,21 +1,6 @@
 ### Inhaltsverzeichnis
 
 * [Spickzettel](#spickzettel)
-    * [fly.io](#flyio)
-    * [Filament](#filament)
-        * [Resourcen anlegen](#resourcen-anlegen)
-        * [Einstellungen in Resourcen vornehmen](#einstellungen-in-resourcen-vornehmen)
-        * [Relation Manager anlegen](#relation-manager-anlegen)
-        * [Diverse Befehle](#diverse-befehle)
-    * [Laravel](#laravel)
-        * [Models generieren](#models-generieren)
-        * [Eloquent Queries](#eloquent-queries)
-        * [Eloquent Relationen](#eloquent-relationen)
-        * [Artisan Befehle](#artisan-befehle)
-    * [Git](#git)
-        * [Git aufsetzen](#git-aufsetzen)
-        * [Repo verbinden](#repo-verbinden)
-* [Dokumentation](#dokumentation)
 
 # Spickzettel
 https://betterscientificsoftware.github.io/python-for-hpc/tutorials/python-pypi-packaging
