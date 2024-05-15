@@ -1,4 +1,5 @@
 LICENSE
+README.md
 setup.py
 jonazarov/AtlassianCloudRest.py
 jonazarov/__init__.py
