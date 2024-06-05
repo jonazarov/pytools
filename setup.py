@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='jonazarov',
-    version='0.1.7',    
+    version='0.1.8',    
     description='Verschiedene Python-Tools, vor allem für Atlassian Cloud',
     url='https://github.com/jonazarov/pytools',
     author='Johannes Nazarov',
@@ -11,7 +11,8 @@ setup(
     packages=['jonazarov'],
     install_requires=['requests>=2.31.0',
                       'bs4>=0.0.1',
-                      'lxml>=5.2.2'
+                      'lxml>=5.2.2',
+                      'prompt_toolkit>=3.0.43'
                       ],
 
     classifiers=[
