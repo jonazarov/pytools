@@ -1,5 +1,7 @@
 import json, pathlib, inspect
 from types import SimpleNamespace
+from prompt_toolkit.shortcuts import input_dialog
+from prompt_toolkit.styles import Style
 
 class NamespaceEncoder(json.JSONEncoder):
     def default(self, o):
@@ -25,7 +27,7 @@ class Unbuffered:
         # you might want to specify some extra behavior here.
         pass    
 
-def confunpack(confdef: dict, config: dict) -> dict:
+def confunpack(confdef: dict, config: dict, pt_style=None) -> dict:
     '''
     Befüllt ein Config-Dict anhand einer conf-Definition aus einer Config-File sowie aus Input-Eingaben
     :param condef: Config-Definition
@@ -35,7 +37,12 @@ def confunpack(confdef: dict, config: dict) -> dict:
     for entry in confdef:
         if type(confdef[entry]) is str:
             if not entry in config:
-                config[entry] = input(confdef[entry])
+                config[entry] = input_dialog(
+                    title="Fehlende Konfigurations-Informationen ergänzen",
+                    cancel_text='Abbruch',
+                    text=confdef[entry],
+                    style=pt_style
+                ).run()
         else:
             if not entry in config:
                 config[entry] = {}
@@ -43,6 +50,17 @@ def confunpack(confdef: dict, config: dict) -> dict:
     return config
 
 class Utils:
+    pt_style = Style.from_dict({
+        'dialog':                   'bg:#94D5E4',
+        'dialog frame.label':       'bg:#e30613 #173861',
+        'dialog.body':              'bg:#009FE3 #e30613',
+        'dialog shadow':            'bg:#3C9CB2',
+        'dialog button':            'bg:#e30613 #173861',
+        'dialog button.focused':    'bg:#E30613',
+        'dialog checkbox-checked':  'bg:#E30613',
+        'dialog checkbox-selected': 'bg:#ff8288',
+    })
+
     def pretty(data: dict | list | str, sort_keys:bool=True, indent:bool|None = 4) -> json:
         '''
         Gibt beliebige Dicts/Lists/Tupel etc. formatiert aus
@@ -83,7 +101,7 @@ class Utils:
     
     def log(current_filename: str|None = None):
         if current_filename == None:
-            current_filename = pathlib.Path(inspect.stack()[1][1]).resolve()
+            current_filename = str(pathlib.Path(inspect.stack()[1][1]).resolve())
         now = time.localtime()
         logfilename = current_filename + time.strftime(".%Y-%m-%d.log", now)
         logfile = codecs.open(logfilename, 'a', encoding='utf-8')
@@ -97,4 +115,4 @@ class Utils:
                 config = json.load(file)
             except:
                 pass
-        return Utils.simplifize(confunpack(confdef, config))
+        return Utils.simplifize(confunpack(confdef, config, Utils.pt_style))
