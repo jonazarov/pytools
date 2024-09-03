@@ -1,18 +1,29 @@
-import requests, time, inspect, json, pathlib
+import requests, time, inspect, json, pathlib, re
 from bs4 import BeautifulSoup as bs
 from typing import List, Callable, Iterable
+from types import SimpleNamespace
 from functools import cmp_to_key
 from requests.auth import HTTPBasicAuth
 from jonazarov.utils import Utils as ut
 from urllib.parse import urlparse, parse_qs
+from prompt_toolkit.shortcuts import message_dialog
 
-def loadAtlassianAuth(configfile=None):
+
+def loadAtlassianAuth(configfile: str | None = None) -> SimpleNamespace:
+    """Lädt die Konfiguration aus der Konfigurationsdatei mithilfe einer Standard-Definition und versucht einen Login an der REST-API
+
+    ### Parameter
+    * **configfile `str | None` (default None)** Dateiname der Konfigurationsdatei. Wenn nichts angegeben, wird nach _config.json_ im Verzeichnis des aufrufenden Skripts gesucht
+
+    ### Rückgabewerte
+    * `SimpleNamespace` Ausgelesene, normalisierte Konfiguration
+    """
     if configfile == None:
         p = pathlib.Path(inspect.stack()[1][1]).parent.resolve()
         configfile = f"{p}\\config.json"
     config = ut.getconfig(
         {
-            "base_urls": "Bitte Cloud-Instanzen durch Kommata getrennt angeben:",
+            "base_urls": "Bitte Cloud-Instanzen durch Kommata getrennt eingeben (Subdomains ausreichend):",
             "orgadmin": {
                 "user": "Bitte Benutzernamen des Admins eingeben:",
                 "token": "Bitte API-Token des Admins eingeben:",
@@ -20,46 +31,60 @@ def loadAtlassianAuth(configfile=None):
         },
         configfile,
     )
-    # URLs nachbearbeiten
-    def url_normalize(url):
-        url = (
-            url.strip()
-            .replace("https://", "")
-            .replace("http://", "")
-            .replace(".atlassian.net/", "")
-            .replace(".atlassian.net", "")
-        )
+
+    def url_normalize(url: str) -> str:
+        """Atlassian-URL normalisieren
+
+        ### Parameter
+        * **url `str`** Eingangs-URL
+
+        ### Rückgabewert
+        * `str`
+        """
+        url = url.strip().replace("https://", "").replace("http://", "").replace(".atlassian.net/", "").replace(".atlassian.net", "")
+        if not re.match(r"^[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?$", url):
+            return None
         return f"https://{url}.atlassian.net/"
+
     if type(config.base_urls) is str:
         config.base_urls = config.base_urls.split(",")
     config.base_urls = list(map(url_normalize, config.base_urls))
+    config.base_urls = [url for url in config.base_urls if url]
+    if not len(config.base_urls):
+        config = ut.normalize(config)
+        del config["base_urls"]
+        with open(configfile, "w", encoding="utf-8") as file:
+            json.dump(config, file, indent=3)
+        return loadAtlassianAuth(configfile)
 
     jira = JiraApi(config.orgadmin.user, config.orgadmin.token, config.base_urls[0])
     try:
         u = jira.usersGetByName(config.orgadmin.user)
         if u == []:
-            print('Die angegebenen Authentifizierungsdaten sind ungültig! Bitte Eingaben wiederholen!')
+            message_dialog("Fehler bei der Authentifizierung", "Die angegebenen Authentifizierungsdaten scheinen ungültig zu sein! Bitte Eingaben wiederholen!", "OK", ut.pt_style).run()
             config = ut.normalize(config)
-            del config['orgadmin']
+            del config["orgadmin"]
             with open(configfile, "w") as file:
                 json.dump(config, file, ensure_ascii=False, indent=3)
             return loadAtlassianAuth(configfile)
     except objectNotExists as e:
-        print('Die angegebene Cloud-Instanz kann nicht erreicht werden! Bitte Eingaben wiederholen!')
+        message_dialog("Fehler bei der Anmeldung", "Die angegebene Cloud-Instanz kann nicht erreicht werden! Bitte Eingaben wiederholen!", "OK", ut.pt_style).run()
         config = ut.normalize(config)
-        del config['base_urls']
+        del config["base_urls"]
         with open(configfile, "w", encoding="utf-8") as file:
             json.dump(config, file, indent=3)
         return loadAtlassianAuth(configfile)
     _config = ut.normalize(config)
-    _config['orgadmin']['accountId'] = u[0].accountId
+    _config["orgadmin"]["accountId"] = u[0].accountId
     config = ut.simplifize(_config)
     with open(configfile, "w", encoding="utf-8") as file:
         json.dump(ut.normalize(config), file, ensure_ascii=False, indent=3)
     return config
 
+
 class objectNotExists(Exception):
     pass
+
 
 class AtlassianCloud:
     """
@@ -68,12 +93,13 @@ class AtlassianCloud:
 
     date_format = "%Y-%m-%dT%H:%M:%S.%fZ"
 
-    def __init__(self, username: str, apikey: str, baseurl: str = None) -> None:
+    def __init__(self, username: str, apikey: str, baseurl: str | None = None) -> None:
         """
         REST-Verbindung vorbereiten
-        :param username: Benutzername für die Authentifizierung
-        :param apikey: API-Key oder Kennwort für die Authentifizierung
-        :param base_url OPTIONAL: URL zur Atlassian-Instanz.
+        ### Parameter
+        * **username `str`** Benutzername für die Authentifizierung
+        * **apikey `str`** API-Key oder Kennwort für die Authentifizierung
+        * **base_url `str | None`(Default None)** URL zur Atlassian-Instanz.
         """
         base_url = ""
         _auth = None
@@ -86,7 +112,8 @@ class AtlassianCloud:
     def setBase(self, baseurl: str) -> None:
         """
         URL zur Atlassian Instanz setzen.
-        :param base_url: URL zur Atlassian-Instanz
+        ### Parameter
+        * **base_url `str`** URL zur Atlassian-Instanz
         """
         if baseurl.endswith("/"):
             baseurl = baseurl[:-1]
@@ -95,18 +122,26 @@ class AtlassianCloud:
     def reauth(self, username: str, apikey: str) -> None:
         """
         Neue Authorisierung vorbereiten
-        :param username: Benutzername für die Authentifizierung
-        :param apikey: API-Key oder Kennwort für die Authentifizierung
+        ### Rückgabewerte
+        * **username `str`** Benutzername für die Authentifizierung
+        * **apikey `str`** API-Key oder Kennwort für die Authentifizierung
         """
         self.auth = HTTPBasicAuth(username, apikey)
 
-    def _check(self) -> bool:
+    def _check(self):
+        """Sicherheitsüberprüfung, ob Eigenschaft `base_url`gesetzt ist (ansonsten Fehler)"""
         if self.base_url == "":
-            raise (
-                "URL zur Atlassian-Instanz mit setBase() oder bei der Initiierung setzen."
-            )
+            raise ("URL zur Atlassian-Instanz mit setBase() oder bei der Initiierung setzen.")
 
-    def _params(self, locals):
+    def _params(self, locals) -> dict:
+        """Umwandlung der eingehenden Daten in GET-Parameter
+
+        ### Parameter
+        * **locals** Eingehende Daten
+
+        ### Rückgabewerte
+        * `dict` Daten bereinigt und _ in Keys durch - ersetzt
+        """
         params = {}
         for name in locals:
             if name == "self":
@@ -114,11 +149,12 @@ class AtlassianCloud:
             params[name.replace("_", "-")] = locals[name]
         return params
 
-    def _callGui(self, url):
-        """
-        GUI aufrufen
-        :param url: URL zur GUI (nach Base-URL)
-        :return: (Im Erfolgsfall ein beautiful-soap Objekt, andernfalls None) und das response-Objekt
+    def _callGui(self, url: str):
+        """GUI aufrufen
+        ### Parameter
+        * **url `str`** URL zur GUI (nach Base-URL)
+        ### Rückgabewerte
+        * Im Erfolgsfall ein beautiful-soap Objekt, andernfalls None; dazu das response-Objekt
         """
         self._check()
         response = requests.get(
@@ -133,20 +169,21 @@ class AtlassianCloud:
     def _callApi(
         self,
         call: str,
-        params: dict = None,
-        method="GET",
-        data: dict = None,
-        apiVersion: int | str = None,
-        alternateBase: str = None,
+        params: dict | None = None,
+        method: str = "GET",
+        data: dict | None = None,
+        apiVersion: int | str | None = None,
+        alternateBase: str | None = None,
     ):
         """
         API aufrufen
-        :param call: Aufruf der API (Direktive)
-        :param params: GET-Parameter
-        :param method: HTTP-Methode (GET, POST, PUT, DELETE)
-        :param data: Daten-Body
-        :param apiVersion: Angabe des API-Endpunktes (in _api_urls gespeichert)
-        :param alternateBase: Alternative Base-URL
+        ### Rückgabewerte
+        * **call `str`** Aufruf der API (Direktive)
+        * **params `dict | None` (Default None)** GET-Parameter
+        * **method `str` (Default "GET")** HTTP-Methode (GET, POST, PUT, DELETE)
+        * **data `dict | None` (Default None)** Daten-Body
+        * **apiVersion `int | str | None` (Default None)** Angabe des API-Endpunktes (in _api_urls gespeichert)
+        * **alternateBase `str | None` (Default None)** Alternative Base-URL
         """
         self._check()
         if params != None and "self" in params and isinstance(self, AtlassianCloud):
@@ -156,17 +193,10 @@ class AtlassianCloud:
         headers = {"Accept": "application/json"}
         return requests.request(
             method,
-            (self.base_url if alternateBase == None else alternateBase)
-            + "/"
-            + self._api_urls[apiVersion if apiVersion != None else self._api_version]
-            + call,
+            (self.base_url if alternateBase == None else alternateBase) + "/" + self._api_urls[apiVersion if apiVersion != None else self._api_version] + call,
             params=params,
             data=ut.dumps(data),
-            headers=(
-                headers
-                if method in ("GET")
-                else headers | {"Content-Type": "application/json"}
-            ),
+            headers=(headers if method in ("GET") else headers | {"Content-Type": "application/json"}),
             auth=self.auth,
         )
 
@@ -180,11 +210,12 @@ class AtlassianCloud:
     ):
         """
         Ergebnis verarbeiten
-        :param response: Response-Objekt
-        :param expectedStatusCode: Welcher Statuscode erwartet wird
-        :param noresponse: Ob ein Antwort-Body erwartet wird (z.B. bei DELETE wird nichts erwartet)
-        :param catchCodes: Liste der HHTP-Codes, für die eine Fehlerbehandlung vorgesehen ist.
-        :param catchClosure: Funktion (nimmt im ersten Parameter das request-Objekt entgegen) für Fehlerbehandlung
+        ### Rückgabewerte
+        * **response** Response-Objekt
+        * **expectedStatusCode** Welcher Statuscode erwartet wird
+        * **noresponse** Ob ein Antwort-Body erwartet wird (z.B. bei DELETE wird nichts erwartet)
+        * **catchCodes** Liste der HHTP-Codes, für die eine Fehlerbehandlung vorgesehen ist.
+        * **catchClosure** Funktion (nimmt im ersten Parameter das request-Objekt entgegen) für Fehlerbehandlung
         """
         try:
             if response.status_code == expectedStatusCode:
@@ -192,11 +223,7 @@ class AtlassianCloud:
                     return True
                 else:
                     return ut.loads(response.text)
-            elif (
-                catchCodes != None
-                and catchClosure != None
-                and response.status_code in catchCodes
-            ):
+            elif catchCodes != None and catchClosure != None and response.status_code in catchCodes:
                 return catchClosure(response)
             elif catchCodes != None and response.status_code in catchCodes:
                 raise objectNotExists()
@@ -231,13 +258,13 @@ class AtlassianCloud:
     ):
         """
         API bei Bedarf mehrfach aufrufen und Ergebnis verarbeiten (für vielfache Aufrufe, für die keine aggregierte Funktion existiert)
-        :param call: Aufruf der API (Direktive)
-        :param params: GET-Parameter
-        :param method: HTTP-Methode (GET, POST, PUT, DELETE)
-        :param data: Daten-Body
-        :param expectedStatusCode: Welcher Statuscode erwartet wird
-        :param noresponse: Ob ein Antwort-Body erwartet wird (z.B. bei DELETE wird nichts erwartet)
-        :param apiVersion: Angabe des API-Endpunktes (in _api_urls gespeichert)
+        * **call** Aufruf der API (Direktive)
+        * **params** GET-Parameter
+        * **method** HTTP-Methode (GET, POST, PUT, DELETE)
+        * **data** Daten-Body
+        * **expectedStatusCode** Welcher Statuscode erwartet wird
+        * **noresponse** Ob ein Antwort-Body erwartet wird (z.B. bei DELETE wird nichts erwartet)
+        * **apiVersion** Angabe des API-Endpunktes (in _api_urls gespeichert)
         """
         response = self._callApi(call, params, method, data, apiVersion)
         try:
@@ -246,12 +273,7 @@ class AtlassianCloud:
                     return True
                 else:
                     return ut.loads(response.text)
-            elif (
-                response.status_code in (401, 404)
-                and response.content.decode("utf-8")
-                == '{"errorMessage": "Site temporarily unavailable"}'
-                and attempt < 5
-            ):
+            elif response.status_code in (401, 404) and response.content.decode("utf-8") == '{"errorMessage": "Site temporarily unavailable"}' and attempt < 5:
                 print(".")
                 time.sleep(5)
                 return self._callSeveralProcessResponse(
@@ -294,26 +316,21 @@ class AtlassianCloud:
     ):
         """
         Ergebnisse seitenweise abrufen
-        :param call: API-Call
-        :param params: Parameter des API-Calls
-        :param resultsKey: In welchem Key werden die Ergebnisse aufgelistet
-        :param subobject: Falls angegeben, in welchem Unterobjekt ist das Ergebnis-Array
-        :param apiVersion: Angabe des API-Endpunktes (in _api_urls gespeichert)
-        :param catchCodes: Liste der HHTP-Codes, für die eine Fehlerbehandlung vorgesehen ist.
-        :param catchClosure: Funktion (nimmt im ersten Parameter das request-Objekt entgegen) für Fehlerbehandlung
-        :param method: HTTP-Methode
-        :param data: Request-Body
+        ### Rückgabewerte
+        * **call** API-Call
+        * **params** Parameter des API-Calls
+        * **resultsKey** In welchem Key werden die Ergebnisse aufgelistet
+        * **subobject** Falls angegeben, in welchem Unterobjekt ist das Ergebnis-Array
+        * **apiVersion** Angabe des API-Endpunktes (in _api_urls gespeichert)
+        * **catchCodes** Liste der HHTP-Codes, für die eine Fehlerbehandlung vorgesehen ist.
+        * **catchClosure** Funktion (nimmt im ersten Parameter das request-Objekt entgegen) für Fehlerbehandlung
+        * **method** HTTP-Methode
+        * **data** Request-Body
         """
-        start = (
-            0
-            if "startAt" not in params
-            else (params["startAt"] if params["startAt"] != None else 0)
-        )
+        start = 0 if "startAt" not in params else (params["startAt"] if params["startAt"] != None else 0)
         limit = None if "maxResults" not in params else params["maxResults"]
         results = self._processResponse(
-            self._callApi(
-                call, params, apiVersion=apiVersion, method=method, data=data
-            ),
+            self._callApi(call, params, apiVersion=apiVersion, method=method, data=data),
             catchCodes=catchCodes,
             catchClosure=catchClosure,
         )
@@ -323,29 +340,19 @@ class AtlassianCloud:
             resultarray = results if subobject == None else getattr(results, subobject)
             for result in getattr(resultarray, resultsKey):
                 yield result
-        while (
-            results != None
-            and results.startAt + results.maxResults < results.total
-            and (limit == None or results.startAt + results.maxResults < start + limit)
-        ):
+        while results != None and results.startAt + results.maxResults < results.total and (limit == None or results.startAt + results.maxResults < start + limit):
             params["startAt"] = results.startAt + results.maxResults
             if limit != None and params["startAt"] + results.maxResults > limit:
-                params["maxResults"] = results.maxResults - (
-                    params["startAt"] + results.maxResults - limit
-                )
+                params["maxResults"] = results.maxResults - (params["startAt"] + results.maxResults - limit)
             results = self._processResponse(
-                self._callApi(
-                    call, params, apiVersion=apiVersion, method=method, data=data
-                ),
+                self._callApi(call, params, apiVersion=apiVersion, method=method, data=data),
                 catchCodes=catchCodes,
                 catchClosure=catchClosure,
             )
             if results == None:
                 return None
             else:
-                resultarray = (
-                    results if subobject == None else getattr(results, subobject)
-                )
+                resultarray = results if subobject == None else getattr(results, subobject)
                 for result in getattr(resultarray, resultsKey):
                     yield result
 
@@ -365,26 +372,29 @@ class JiraApi(AtlassianCloud):
     def user(self, accountId: str, expand: str = None):
         """
         Jira-User ausgeben
-        :param accountId: accountId des abgefragten Benutzers
-        :param expand: Kommaseparierte Liste aus groups, applicationRoles
-        :return:
+        * **accountId** accountId des abgefragten Benutzers
+        * **expand** Kommaseparierte Liste aus groups, applicationRoles
+        ### Rückgabewerte
+        * 
         """
         return self._processResponse(self._callApi("user", locals()))
 
     def userSearch(self, accountId: str = None, query: str = None):
         """
         Nach Jira-User suchen
-        :param accountId: accountId des abgefragten Benutzers
-        :param username:
-        :return:
+        * **accountId** accountId des abgefragten Benutzers
+        * **username:
+        ### Rückgabewerte
+        * 
         """
         return self._processResponse(self._callApi("user/search", locals()), catchCodes=[404])
 
     def usersGetByName(self, displayName: str = None):
         """
         Nach Jira-User anhand des displayNamens suchen
-        :param displayName:
-        :return:
+        * **displayName:
+        ### Rückgabewerte
+        * 
         """
         users = self.userSearch(query=displayName)
         return list(filter(lambda u: u.displayName == displayName, users))
@@ -392,23 +402,23 @@ class JiraApi(AtlassianCloud):
     def userGroups(self, accountId: str):
         """
         Benutzergruppen zu einem Jira-User ausgeben
-        :param accountId: accountId des abgefragten Benutzers
-        :return:
+        * **accountId** accountId des abgefragten Benutzers
+        ### Rückgabewerte
+        * 
         """
         return self._processResponse(self._callApi("user/groups", locals()))
 
     def groupCreate(self, name: str, withUsersAdd: List[str] = None):
         """
         Neue Benutzergruppe erzeugen
-        :param name: Name der neuen Gruppe
-        :param description: Beschreibung der neuen Gruppe
-        :param withUsersAdd: Liste der anzufügenden Benutzer (accountId)
+        ### Rückgabewerte
+        * **name** Name der neuen Gruppe
+        * **description** Beschreibung der neuen Gruppe
+        * **withUsersAdd** Liste der anzufügenden Benutzer (accountId)
         """
         data = locals()
         del data["withUsersAdd"]
-        group = self._processResponse(
-            self._callApi("group", method="POST", data=data), 201
-        )
+        group = self._processResponse(self._callApi("group", method="POST", data=data), 201)
         if withUsersAdd:
             for accountId in withUsersAdd:
                 self.groupUserAdd(accountId, group.groupId)
@@ -423,10 +433,10 @@ class JiraApi(AtlassianCloud):
     ):
         """
         Benutzergruppe löschen
-        :param groupId: ID der Gruppe
-        :param groupname: Name der Gruppe [deprecated]
-        :param swapGroupId: ID der Gruppe, zu der die bestehenden Berechtigungen/Beschränkungen übertragen werden sollen
-        :param swapGroup: Name der Gruppe, zu der die bestehenden Berechtigungen/Beschränkungen übertragen werden sollen [deprecated]
+        * **groupId** ID der Gruppe
+        * **groupname** Name der Gruppe [deprecated]
+        * **swapGroupId** ID der Gruppe, zu der die bestehenden Berechtigungen/Beschränkungen übertragen werden sollen
+        * **swapGroup** Name der Gruppe, zu der die bestehenden Berechtigungen/Beschränkungen übertragen werden sollen [deprecated]
         """
         if groupId == None and groupname == None:
             raise ValueError("groupId oder groupname sollen gesetzt sein")
@@ -459,11 +469,12 @@ class JiraApi(AtlassianCloud):
     ):
         """
         Nach Benutzergruppen suchen
-        :param query: Zeichenfolge, die im Gruppennamen vorhanden sein muss
-        :param excludeId: Liste der Gruppen-IDs, die zu ignorieren sind
-        :param exclude: Liste der Gruppen-Namen die zu ignorieren sind [deprecated]
-        :param caseInsensitive: Query beachtet keine Groß-/Kleinschreibung
-        :param maxResults: Limit der Ergebnisse
+        ### Rückgabewerte
+        * **query** Zeichenfolge, die im Gruppennamen vorhanden sein muss
+        * **excludeId** Liste der Gruppen-IDs, die zu ignorieren sind
+        * **exclude** Liste der Gruppen-Namen die zu ignorieren sind [deprecated]
+        * **caseInsensitive** Query beachtet keine Groß-/Kleinschreibung
+        * **maxResults** Limit der Ergebnisse
         """
         params = locals()
         return self._processResponse(self._callApi("groups/picker", params))
@@ -477,11 +488,13 @@ class JiraApi(AtlassianCloud):
     ):
         """
         Mitglieder einer Benutzergruppe ausgeben [Generator]
-        :param groupId: ID der Gruppe
-        :param groupname: Name der Gruppe [deprecated]
-        :param includeInactiveUsers: Inaktive Benutzer mit aufzählen
-        :param maxResults: Limit für Benutzer-Ergebnis-Liste
-        :return: Iterable[Array der Benutzer] oder None, falls Gruppe nicht existiert
+        ### Rückgabewerte
+        * **groupId** ID der Gruppe
+        * **groupname** Name der Gruppe [deprecated]
+        * **includeInactiveUsers** Inaktive Benutzer mit aufzählen
+        * **maxResults** Limit für Benutzer-Ergebnis-Liste
+        ### Rückgabewerte
+        *  Iterable[Array der Benutzer] oder None, falls Gruppe nicht existiert
         """
         if groupId == None and groupname == None:
             raise ValueError("groupId oder groupname sollen gesetzt sein")
@@ -490,19 +503,19 @@ class JiraApi(AtlassianCloud):
             raise objectNotExists("group")
 
         try:
-            yield from self._processResponsePaginated(
-                "group/member", locals(), catchCodes=[404], catchClosure=notFound
-            )
+            yield from self._processResponsePaginated("group/member", locals(), catchCodes=[404], catchClosure=notFound)
         except objectNotExists:
             yield None
 
     def groupUserAdd(self, accountId: str, groupId: str = None, groupname: str = None):
         """
         Benutzer einer Gruppe hinzufügen
-        :param accountId: Account-ID des Benutzers, der hinzugefügt werden soll
-        :param groupId: ID der Gruppe
-        :param groupname: Name der Gruppe [deprecated]
-        :return: Datensatz der Gruppe (mit aktueller Benutzerliste)
+        ### Rückgabewerte
+        * **accountId** Account-ID des Benutzers, der hinzugefügt werden soll
+        * **groupId** ID der Gruppe
+        * **groupname** Name der Gruppe [deprecated]
+        ### Rückgabewerte
+        *  Datensatz der Gruppe (mit aktueller Benutzerliste)
         """
         if groupId == None and groupname == None:
             raise ValueError("groupId oder groupname sollen gesetzt sein")
@@ -526,9 +539,10 @@ class JiraApi(AtlassianCloud):
     def groupUserDel(self, accountId: str, groupId: str = None, groupname: str = None):
         """
         Benutzer aus einer Gruppe entfernen
-        :param accountId: Account-ID des Benutzers, der hinzugefügt werden soll
-        :param groupId: ID der Gruppe
-        :param groupname: Name der Gruppe [deprecated]
+        ### Rückgabewerte
+        * **accountId** Account-ID des Benutzers, der hinzugefügt werden soll
+        * **groupId** ID der Gruppe
+        * **groupname** Name der Gruppe [deprecated]
         """
         if groupId == None and groupname == None:
             raise ValueError("groupId oder groupname sollen gesetzt sein")
@@ -556,17 +570,16 @@ class JiraApi(AtlassianCloud):
     ):
         """
         Benutzer einer Gruppe setzen
-        :param setAccountIds: Account-IDs der Benutzer, die in der Gruppe verbleiben/hinzugefügt werden wollen
-        :param oldAccountIds: Account-IDs der aktuellen Benutzer der Gruppe
-        :param groupId: ID der Gruppe
-        :param groupname: Name der Gruppe [deprecated]
+        ### Rückgabewerte
+        * **setAccountIds** Account-IDs der Benutzer, die in der Gruppe verbleiben/hinzugefügt werden wollen
+        * **oldAccountIds** Account-IDs der aktuellen Benutzer der Gruppe
+        * **groupId** ID der Gruppe
+        * **groupname** Name der Gruppe [deprecated]
         """
         if groupId == None and groupname == None:
             raise ValueError("groupId oder groupname sollen gesetzt sein")
         if oldAccountIds == None:
-            oldAccountIds = [
-                m.accountId for m in list(self.groupMember(groupId, groupname))
-            ]
+            oldAccountIds = [m.accountId for m in list(self.groupMember(groupId, groupname))]
         # neue hinzufügen
         for accountId in setAccountIds:
             if accountId not in oldAccountIds:
@@ -579,7 +592,8 @@ class JiraApi(AtlassianCloud):
     def filterMy(self, expand: str = None, includeFavourites: bool = False):
         """
         Eigene Jira-Filter ausgeben
-        :return:
+        ### Rückgabewerte
+        * 
         """
         return self._processResponse(self._callApi("filter/my", locals()))
 
@@ -599,20 +613,30 @@ class JiraApi(AtlassianCloud):
         """
         Jira-Filter suchen
         https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-filters/#api-rest-api-3-filter-search-get
-        :return: Iterable[Array an Filtern]
+        ### Rückgabewerte
+        *  Iterable[Array an Filtern]
         """
         yield from self._processResponsePaginated("filter/search", locals())
 
     def filterGet(self, id):
         """
         Jira-Filter abrufen
-        :param id: ID des Filters
-        :return:
+        * **id** ID des Filters
+        ### Rückgabewerte
+        * 
         """
+
+        def errors(response: requests.Response):
+            if (
+                response.status_code == 404
+                and response.content
+                and ut.loads(response.content.decode("utf-8")).errorMessages[0]
+                in ("Der ausgewählte Filter steht Ihnen nicht zur Verfügung. Er wurde eventuell gelöscht oder seine Berechtigungen wurden geändert.")
+            ):
+                return None
+
         try:
-            return self._processResponse(
-                self._callApi(f"filter/{id}"), catchCodes=[400]
-            )
+            return self._processResponse(self._callApi(f"filter/{id}"), catchCodes=[400, 404], catchClosure=errors)
         except objectNotExists:
             return None
 
@@ -630,16 +654,17 @@ class JiraApi(AtlassianCloud):
     ):
         """
         Jira-Filter schreiben
-        :param id: ID des Filters
-        :param name: Name des Filters
-        :param jql: jql des Filters
-        :param description: Beschreibung des Filters
-        :param favourite: Filter für aktuellen Benutzer als Favoriten markieren
-        :param sharePermissions: Betrachtungs-Freigaben, Liste von Objekten {'type':"user/group/project/projectRole/global/loggedin/project-unknown",'user':{'accountId':""},'group':{'groupId/name':""},'project':{'id':"",'email':"",'favourite':True/False},'role':{'name':"",'translatedName':"",'currentUserRole':True/False}}
-        :param editPermissions: Bearbeitungs-Freigaben, Liste von Objekten {'type':"user/group/project/projectRole/global/loggedin/project-unknown",'user':{'accountId':""},'group':{'groupId/name':""},'project':{'id':"",'email':"",'favourite':True/False},'role':{'name':"",'translatedName':"",'currentUserRole':True/False}}
+        * **id** ID des Filters
+        * **name** Name des Filters
+        * **jql** jql des Filters
+        * **description** Beschreibung des Filters
+        * **favourite** Filter für aktuellen Benutzer als Favoriten markieren
+        * **sharePermissions** Betrachtungs-Freigaben, Liste von Objekten {'type':"user/group/project/projectRole/global/loggedin/project-unknown",'user':{'accountId':""},'group':{'groupId/name':""},'project':{'id':"",'email':"",'favourite':True/False},'role':{'name':"",'translatedName':"",'currentUserRole':True/False}}
+        * **editPermissions** Bearbeitungs-Freigaben, Liste von Objekten {'type':"user/group/project/projectRole/global/loggedin/project-unknown",'user':{'accountId':""},'group':{'groupId/name':""},'project':{'id':"",'email':"",'favourite':True/False},'role':{'name':"",'translatedName':"",'currentUserRole':True/False}}
         """
         data = locals()
         del data["id"], data["expand"], data["overrideSharePermissions"]
+        data = self.permissionsWritable(data)
         return self._processResponse(
             self._callApi(
                 f"filter/{id}",
@@ -655,23 +680,16 @@ class JiraApi(AtlassianCloud):
     def filterOwner(self, id, accountId):
         """
         Eigentümer eines Jira-Filters setzen
-        :param id: ID des Filters
-        :param accountId: accountId des neuen Eigentümers
+        * **id** ID des Filters
+        * **accountId** accountId des neuen Eigentümers
         """
 
         def errors(response: requests.Response):
-            if (
-                response.status_code == 400
-                and response.content
-                and ut.loads(response.content.decode("utf-8")).errorMessages[0]
-                == "The user already owns a filter with the same name."
-            ):
+            if response.status_code == 400 and response.content and ut.loads(response.content.decode("utf-8")).errorMessages[0] == "The user already owns a filter with the same name.":
                 return -1
 
         return self._processResponse(
-            self._callApi(
-                f"filter/{id}/owner", method="PUT", data={"accountId": accountId}
-            ),
+            self._callApi(f"filter/{id}/owner", method="PUT", data={"accountId": accountId}),
             204,
             catchCodes=[400],
             catchClosure=errors,
@@ -680,14 +698,14 @@ class JiraApi(AtlassianCloud):
     def agileBoards(self, name: str = None, maxResults: int = None):
         """
         Sämtliche Software/Agile-Boards auflisten
-        :param name: Teilstring des Board-Namens
+        * **name** Teilstring des Board-Namens
         """
         yield from self._processResponsePaginated("board", locals(), apiVersion="agile")
 
     def agileBoardConfig(self, id: int):
         """
         Board-Konfiguration auslesen
-        :param id: ID des Boards
+        * **id** ID des Boards
         """
         return self._callSeveralProcessResponse(
             f"rapidviewconfig/editmodel.json?rapidViewId={id}&cardLayoutConfig=false",
@@ -697,9 +715,9 @@ class JiraApi(AtlassianCloud):
     def agileBoardAdminSet(self, id: int, userKeys: List[str], groupKeys: List[str]):
         """
         Board-Konfiguration setzen
-        :param id: ID des Boards
-        :param userKeys: Liste der Benutzer (accountId)
-        :param groupKeys: Liste der Gruppen (accountId)
+        * **id** ID des Boards
+        * **userKeys** Liste der Benutzer (accountId)
+        * **groupKeys** Liste der Gruppen (accountId)
         """
         data = {"id": id, "boardAdmins": {"userKeys": userKeys, "groupKeys": groupKeys}}
         return self._callSeveralProcessResponse(
@@ -709,12 +727,11 @@ class JiraApi(AtlassianCloud):
             apiVersion="greenhopper",
         )
 
-    def dashboard(
-        self, filter: str = None, startAt: int = None, maxResults: int = None
-    ) -> Iterable:
+    def dashboard(self, filter: str = None, startAt: int = None, maxResults: int = None) -> Iterable:
         """
         Sämtliche Jira-Dashboards abrufen [Generator]
-        :return: Iterable[Array von Dashboard-Objekten]
+        ### Rückgabewerte
+        *  Iterable[Array von Dashboard-Objekten]
         """
         return self._processResponsePaginated("dashboard", locals(), "dashboards")
 
@@ -733,20 +750,20 @@ class JiraApi(AtlassianCloud):
     ):
         """
         Nach Jira-Dashboards suchen
-        :return:
+        ### Rückgabewerte
+        * 
         """
         return self._processResponsePaginated("dashboard/search", locals())
 
     def dashboardGet(self, id):
         """
         Jira-Dashboard abrufen
-        :param id: ID des Filters
-        :return:
+        * **id** ID des Filters
+        ### Rückgabewerte
+        * 
         """
         try:
-            return self._processResponse(
-                self._callApi(f"dashboard/{id}"), catchCodes=[404]
-            )
+            return self._processResponse(self._callApi(f"dashboard/{id}"), catchCodes=[404])
         except objectNotExists:
             return None
 
@@ -760,22 +777,72 @@ class JiraApi(AtlassianCloud):
     ):
         """
         Jira-Dashboard schreiben
-        :param id: ID des Dashboards
-        :param name: Name des Dashboards
-        :param description: Beschreibung des Dashboards
-        :param sharePermissions: Betrachtungs-Freigaben, Liste von Objekten {'type':"user/group/project/projectRole/global/loggedin/project-unknown",'user':{'accountId':""},'group':{'groupId/name':""},'project':{'id':"",'email':"",'favourite':True/False},'role':{'name':"",'translatedName':"",'currentUserRole':True/False}}
-        :param editPermissions: Bearbeitungs-Freigaben, Liste von Objekten {'type':"user/group/project/projectRole/global/loggedin/project-unknown",'user':{'accountId':""},'group':{'groupId/name':""},'project':{'id':"",'email':"",'favourite':True/False},'role':{'name':"",'translatedName':"",'currentUserRole':True/False}}
+        * **id** ID des Dashboards
+        * **name** Name des Dashboards
+        * **description** Beschreibung des Dashboards
+        * **sharePermissions** Betrachtungs-Freigaben, Liste von Objekten {'type':"user/group/project/projectRole/global/loggedin/project-unknown",'user':{'accountId':""},'group':{'groupId/name':""},'project':{'id':"",'email':"",'favourite':True/False},'role':{'name':"",'translatedName':"",'currentUserRole':True/False}}
+        * **editPermissions** Bearbeitungs-Freigaben, Liste von Objekten {'type':"user/group/project/projectRole/global/loggedin/project-unknown",'user':{'accountId':""},'group':{'groupId/name':""},'project':{'id':"",'email':"",'favourite':True/False},'role':{'name':"",'translatedName':"",'currentUserRole':True/False}}
         """
         data = locals()
-        del data["id"]
-        return self._processResponse(
-            self._callApi(f"dashboard/{id}", method="PUT", data=data)
-        )
+        del data["id"], data["self"]
+        if not sharePermissions or not editPermissions:
+            dashboard = self.permissionsWritable(self.dashboardGet(id))
+            data["sharePermissions"] = dashboard["sharePermissions"] if not sharePermissions else data["sharePermissions"]
+            data["editPermissions"] = dashboard["editPermissions"] if not editPermissions else data["editPermissions"]
+        return self._processResponse(self._callApi(f"dashboard/{id}", method="PUT", data=data))
+
+    def permissionsWritable(self, entryOrPermission: List[dict] | dict | SimpleNamespace | List[SimpleNamespace]):
+        """
+        Dünnnt die editPermissions bzw. sharePermissions-Arrays auf das zum Schreiben Notwendige aus.
+        ### Parameter
+        * entryOrPermission: List[dict] | dict
+            * Eintrag (z.B. JiraFilter oder Dashboard) als [dict] mit `editPermissions` bzw. `sharePermissions` als Eigenschaften, bzw. direkt diese Eigenschaften
+        ### Rückgabe
+        * Modifizierter Input
+        """
+        entryOrPermission = ut.normalize(entryOrPermission)
+        try:
+            newperms = []
+            permtypes = (
+                {"permission": entryOrPermission}
+                if (type(entryOrPermission) == list)
+                else {"editPermissions": entryOrPermission["editPermissions"], "sharePermissions": entryOrPermission["sharePermissions"]}
+            )
+            for typ in permtypes:
+                newperms = []
+                if permtypes[typ] == None:
+                    permtypes[typ] = []
+                for perm in permtypes[typ]:
+                    unbekannt = False
+                    if perm["type"] == "user":
+                        perm["user"] = {"accountId": perm["user"]["accountId"]}
+                    elif perm["type"] == "group":
+                        if "groupId" in perm["group"]:
+                            perm["group"] = {"groupId": perm["group"]["groupId"]}
+                        else:
+                            perm["group"] = {"name": perm["group"]["name"]}
+                    elif perm["type"] == "project":
+                        perm["project"] = {"id": perm["project"]["id"]}
+                    elif perm["type"] == "projectRole":
+                        perm["role"] = {"name": perm["role"]["name"]}
+                    else:
+                        print("   >>> Unbekannt: ", perm)
+                        unbekannt = True
+                    if "id" in perm:
+                        del perm["id"]
+                    if not unbekannt:
+                        newperms.append(perm)
+                if type(entryOrPermission) != list:
+                    entryOrPermission[typ] = newperms
+            return newperms if type(entryOrPermission) == list else entryOrPermission
+        except Exception as e:
+            print("FEHLER mit Permissions:")
+            print(e, ut.pretty(entryOrPermission))
 
     def _proceedAdminList(self, tr):
         tds = list(tr.find_all("td"))
-        name = "".join(list(tds[0].stripped_strings))
-        ownerName = "".join(list(tds[1].stripped_strings))
+        name = "".join(list(tds[0].div.span.stripped_strings))
+        ownerName = "".join(list(tds[1].span.stripped_strings))
         if ownerName in ("None", "Keine"):
             ownerName = []
         perms = {}
@@ -798,21 +865,11 @@ class JiraApi(AtlassianCloud):
                         continue
                     type = str(li.contents[1].string)
                     inhalt = str(li.contents[2]).strip(":").strip()
-                    inhalt = (
-                        inhalt.replace("(ANZEIGEN)", "")
-                        .replace("(VIEW)", "")
-                        .replace("(BEARBEITEN)", "")
-                        .replace("(EDIT)", "")
-                        .strip()
-                    )
+                    inhalt = inhalt.replace("(ANZEIGEN)", "").replace("(VIEW)", "").replace("(BEARBEITEN)", "").replace("(EDIT)", "").strip()
                     if type in ("Benutzer", "User"):
-                        perms[perm].append(
-                            {"type": "user", "user": {"displayName": inhalt}}
-                        )
+                        perms[perm].append({"type": "user", "user": {"displayName": inhalt}})
                     elif type in ("Projekt", "Project"):
-                        perms[perm].append(
-                            {"type": "project", "project": {"name": inhalt}}
-                        )
+                        perms[perm].append({"type": "project", "project": {"name": inhalt}})
                     elif type in ("Gruppe", "Group"):
                         perms[perm].append({"type": "group", "group": {"name": inhalt}})
                     else:
@@ -856,11 +913,7 @@ class JiraApi(AtlassianCloud):
                 if offsets[typ] == -1:
                     continue
                 if soup.find("table", id=f"mf_{typ}"):
-                    for tr in (
-                        soup.find("table", id=f"mf_{typ}")
-                        .find("tbody")
-                        .find_all("tr", id=startsWithMf)
-                    ):
+                    for tr in soup.find("table", id=f"mf_{typ}").find("tbody").find_all("tr", id=startsWithMf):
                         if limit != None and count >= limit:
                             break
                         filt = self.filterGet(tr.attrs["id"][3:])
@@ -876,9 +929,7 @@ class JiraApi(AtlassianCloud):
                     offsets[typ] = -1
                     continue
                 offsets[typ] += 1
-            if offsets["browse"] == -1 and (
-                "trash_browse" not in offsets or offsets["trash_browse"] == -1
-            ):
+            if offsets["browse"] == -1 and ("trash_browse" not in offsets or offsets["trash_browse"] == -1):
                 break
             if limit != None and count >= limit:
                 break
@@ -910,11 +961,7 @@ class JiraApi(AtlassianCloud):
                 if offsets[typ] == -1:
                     continue
                 try:
-                    for tr in (
-                        soup.find("table", id=f"pp_{typ}")
-                        .find("tbody")
-                        .find_all("tr", id=startsWithPp)
-                    ):
+                    for tr in soup.find("table", id=f"pp_{typ}").find("tbody").find_all("tr", id=startsWithPp):
                         if limit != None and count >= limit:
                             break
                         dashb = self.dashboardGet(tr.attrs["id"][3:])
@@ -930,9 +977,7 @@ class JiraApi(AtlassianCloud):
                     offsets[typ] = -1
                     continue
                 offsets[typ] += 1
-            if offsets["browse"] == -1 and (
-                "trash_browse" not in offsets or offsets["trash_browse"] == -1
-            ):
+            if offsets["browse"] == -1 and ("trash_browse" not in offsets or offsets["trash_browse"] == -1):
                 break
             if limit != None and count >= limit:
                 break
@@ -940,8 +985,8 @@ class JiraApi(AtlassianCloud):
     def dashboardOwner(self, dashboardId: int, accountId: str):
         """
         Jira-Dashboard Owner ändern
-        :param dashboardId: ID des zu übereignenden Dashboards
-        :param accountId: accountId des neuen Eigentümers
+        * **dashboardId** ID des zu übereignenden Dashboards
+        * **accountId** accountId des neuen Eigentümers
         """
         soup, resp = self._callGui("secure/admin/dashboards/ViewSharedDashboards.jspa")
         atl_token = soup.find("meta", id="atlassian-token").attrs["content"]
@@ -985,9 +1030,7 @@ class ConfluenceApi(AtlassianCloud):
         self._api_urls = {2: "wiki/api/v2/", 1: "wiki/rest/api/"}
         self._api_version = 2
 
-    def _processResponsePaginated(
-        self, call: str, params: dict = None, resultsKey: str = "results"
-    ):
+    def _processResponsePaginated(self, call: str, params: dict = None, resultsKey: str = "results"):
         limit = None if "limit" not in params else params["limit"]
         if limit == None:
             params["limit"] = 25
@@ -1002,11 +1045,7 @@ class ConfluenceApi(AtlassianCloud):
             totalCount += count
             for result in getattr(results, resultsKey):
                 yield result
-        while (
-            results != None
-            and hasattr(results._links, "next")
-            and (limit == None or totalCount < limit)
-        ):
+        while results != None and hasattr(results._links, "next") and (limit == None or totalCount < limit):
             # params['Cursor'] = results._links.next.split('&cursor=')[1] + ';rel="next"'
             try:
                 parsed_url = urlparse(results._links.next)
@@ -1035,8 +1074,10 @@ class ConfluenceApi(AtlassianCloud):
     ):
         """
         Alle Seiten ausgeben
-        :param body_format: storage oder atlas_doc_format
-        :return:
+        ### Rückgabewerte
+        * **body_format: storage oder atlas_doc_format
+        ### Rückgabewerte
+        * 
         """
         yield from self._processResponsePaginated("pages", self._params(locals()))
 
@@ -1051,10 +1092,12 @@ class ConfluenceApi(AtlassianCloud):
     ) -> Iterable:
         """
         Alle Seiten zu einem Label ausgeben
-        :param label: ID des Labels als int oder Name des Labels als str
-        :param body_format: storage oder atlas_doc_format
-        :param space_id: IDs der Bereiche, auf die die Ergebnisse ggf. begrenzt werden sollen
-        :return: Iterable[Array an Page-Objekten]
+        ### Rückgabewerte
+        * **label** ID des Labels als int oder Name des Labels als str
+        * **body_format: storage oder atlas_doc_format
+        * **space_id: IDs der Bereiche, auf die die Ergebnisse ggf. begrenzt werden sollen
+        ### Rückgabewerte
+        *  Iterable[Array an Page-Objekten]
         """
         params = locals()
         del params["label"]
@@ -1063,9 +1106,7 @@ class ConfluenceApi(AtlassianCloud):
             label = labelinf.label.id
         if space_id and isinstance(space_id, list):
             space_id = ",".join([str(n) for n in space_id])
-        yield from self._processResponsePaginated(
-            f"labels/{label}/pages", self._params(params)
-        )
+        yield from self._processResponsePaginated(f"labels/{label}/pages", self._params(params))
 
     def pagesChildren(
         self,
@@ -1076,23 +1117,22 @@ class ConfluenceApi(AtlassianCloud):
     ):
         """
         Alle Unterseiten ausgeben
-        :param id: ID der Seite, deren Unterseiten ausgegeben werden sollen
-        :param sort: Feldname, nach dem die Ausgabe sortiert werden soll
-        :return:
+        ### Rückgabewerte
+        * **id** ID der Seite, deren Unterseiten ausgegeben werden sollen
+        * **sort** Feldname, nach dem die Ausgabe sortiert werden soll
+        ### Rückgabewerte
+        * 
         """
         params = locals()
         del params["id"]
-        yield from self._processResponsePaginated(
-            f"pages/{id}/children", self._params(params)
-        )
+        yield from self._processResponsePaginated(f"pages/{id}/children", self._params(params))
 
-    def pagesSort(
-        self, parentId: int, order: str | Callable = "ASC", recursive: bool = False
-    ):
+    def pagesSort(self, parentId: int, order: str | Callable = "ASC", recursive: bool = False):
         """
         Seiten eines Zweigs sortieren
-        :param parentId: ID der Seite, deren Unterseiten sortiert werden sollen
-        :param order: Reihenfolge: ASC= alph. aufsteigend, DESC= alph. absteigend; oder eine Compare-Funktion (mit return 1,0 oder -1), die als Elemente jeweils Dicts mit folgenden Keys bekommt: id, title, status, spaceId, childPosition
+        ### Rückgabewerte
+        * **parentId** ID der Seite, deren Unterseiten sortiert werden sollen
+        * **order** Reihenfolge: ASC= alph. aufsteigend, DESC= alph. absteigend; oder eine Compare-Funktion (mit return 1,0 oder -1), die als Elemente jeweils Dicts mit folgenden Keys bekommt: id, title, status, spaceId, childPosition
         """
         pages = list(self.pagesChildren(parentId, sort="title"))
         if callable(order):
@@ -1108,11 +1148,7 @@ class ConfluenceApi(AtlassianCloud):
                     ut.pretty(
                         self.contentMove(
                             pages[index + 1].id,
-                            (
-                                "before"
-                                if not callable(order) and order == "DESC"
-                                else "after"
-                            ),
+                            ("before" if not callable(order) and order == "DESC" else "after"),
                             pages[index].id,
                         ),
                         False,
@@ -1136,9 +1172,11 @@ class ConfluenceApi(AtlassianCloud):
     ):
         """
         Seite erzeugen
-        :param body: je nach body_format: storage -> HTML/XML; atlas_doc_format -> Inhalt von body.atlas_doc_format.value als dict
-        :param body_format: storage oder atlas_doc_format
-        :return:
+        ### Rückgabewerte
+        * **body** je nach body_format: storage -> HTML/XML; atlas_doc_format -> Inhalt von body.atlas_doc_format.value als dict
+        * **body_format: storage oder atlas_doc_format
+        ### Rückgabewerte
+        * 
         """
         data = locals()
         params = {}
@@ -1147,9 +1185,7 @@ class ConfluenceApi(AtlassianCloud):
             del data[param]
 
         if body_format == "storage":
-            data["body"] = {
-                "storage": {"representation": "storage", "value": data["body"]}
-            }
+            data["body"] = {"storage": {"representation": "storage", "value": data["body"]}}
         else:
             data["body"] = {
                 "atlas_doc_format": {
@@ -1157,9 +1193,7 @@ class ConfluenceApi(AtlassianCloud):
                     "value": ut.dumps(data["body"]),
                 }
             }
-        return self._processResponse(
-            self._callApi(f"pages", self._params(params), "POST", data)
-        )
+        return self._processResponse(self._callApi(f"pages", self._params(params), "POST", data))
 
     def pageUpdate(
         self,
@@ -1174,11 +1208,13 @@ class ConfluenceApi(AtlassianCloud):
     ):
         """
         Seite aktualisieren
-        :param id:
-        :param body: je nach body_format: storage -> HTML/XML; atlas_doc_format -> Inhalt von body.atlas_doc_format.value als dict
-        :param body_format: storage oder atlas_doc_format
-        :param version: Version als {'number':<int>,'message':'<string>','minorEdit':<bool>}
-        :return:
+        ### Rückgabewerte
+        * **id:
+        * **body** je nach body_format: storage -> HTML/XML; atlas_doc_format -> Inhalt von body.atlas_doc_format.value als dict
+        * **body_format: storage oder atlas_doc_format
+        * **version** Version als {'number':<int>,'message':'<string>','minorEdit':<bool>}
+        ### Rückgabewerte
+        * 
         """
         data = locals()
         params = {}
@@ -1187,9 +1223,7 @@ class ConfluenceApi(AtlassianCloud):
         del data[param]
 
         if body_format == "storage":
-            data["body"] = {
-                "storage": {"representation": "storage", "value": data["body"]}
-            }
+            data["body"] = {"storage": {"representation": "storage", "value": data["body"]}}
         elif body_format == "atlas_doc_format":
             data["body"] = {
                 "atlas_doc_format": {
@@ -1201,9 +1235,7 @@ class ConfluenceApi(AtlassianCloud):
         if version == None:
             page = self.page(id)
             data["version"] = {"number": (int(page.version.number) + 1), "message": ""}
-        return self._processResponse(
-            self._callApi(f"pages/{id}", self._params(params), "PUT", data)
-        )
+        return self._processResponse(self._callApi(f"pages/{id}", self._params(params), "PUT", data))
 
     def page(
         self,
@@ -1215,23 +1247,61 @@ class ConfluenceApi(AtlassianCloud):
     ):
         """
         Einzelne Seite samt Informationen ausgeben
-        :param id:
-        :param version:
-        :param get_draft:
-        :param body_format: storage oder atlas_doc_format
-        :return:
+        ### Rückgabewerte
+        * **id:
+        * **version:
+        * **get_draft:
+        * **body_format: storage oder atlas_doc_format
+        ### Rückgabewerte
+        * 
         """
         params = locals()
         del params["id"]
         return self._processResponse(self._callApi(f"pages/{id}", self._params(params)))
 
+    def pageLabels(
+        self,
+        id: int,
+        prefix: str = None,
+    ):
+        """
+        Labels einer einzelnen Seite ausgeben
+        ### Rückgabewerte
+        * **id** Page-ID
+        * **prefix** my, team, global, system als mögliche Werte
+        ### Rückgabewerte
+        *  Aktuelle Label-Definition der Seite
+        """
+        params = locals()
+        del params["id"]
+        return self._processResponse(self._callApi(f"pages/{id}/labels", self._params(params)))
+
+    def contentAddLabels(self, id: int, labels: List[dict] | dict):
+        """
+        Stichworte eines Contents / einer Seite aktualisieren
+        * **id** ID des betroffenen Contents
+        * **labels** Labels, die angefügt werden sollen
+        ### Rückgabewerte
+        *  Aktuelle Label-Definition der Seite
+        """
+        return self._processResponse(
+            self._callApi(
+                f"content/{id}/label",
+                method="POST",
+                data=labels,
+                apiVersion=1,
+            )
+        )
+
     def contentMove(self, pageId: int, position: str, targetId: int):
         """
         Seite verschieben
-        :param pageId: ID der zu verschiebenden Seite
-        :param position: Richtung der Verschiebung: before - vor die Ziel-Seite; after - hinter die Ziel-Seite; append - unter die Ziel-Seite (anfügen)
-        :param targetId: ID der Ziel-Seite
-        :return: pageId
+        ### Rückgabewerte
+        * **pageId** ID der zu verschiebenden Seite
+        * **position** Richtung der Verschiebung: before - vor die Ziel-Seite; after - hinter die Ziel-Seite; append - unter die Ziel-Seite (anfügen)
+        * **targetId** ID der Ziel-Seite
+        ### Rückgabewerte
+        *  pageId
         """
         return self._processResponse(
             self._callApi(
@@ -1244,31 +1314,26 @@ class ConfluenceApi(AtlassianCloud):
     def contentDescendants(self, id: int, expand: List[str] = None):
         """
         Seite verschieben
-        :param id:
-        :param expand: attachment, comments, page
-        :return: pageId
+        ### Rückgabewerte
+        * **id:
+        * **expand** attachment, comments, page
+        ### Rückgabewerte
+        *  pageId
         """
         params = locals()
         del params["id"]
-        return self._processResponse(
-            self._callApi(
-                f"content/{id}/descendant", self._params(params), apiVersion=1
-            )
-        )
+        return self._processResponse(self._callApi(f"content/{id}/descendant", self._params(params), apiVersion=1))
 
-    def labelInformation(
-        self, name: str, type: str = None, start: int = None, limit: int = None
-    ):
+    def labelInformation(self, name: str, type: str = None, start: int = None, limit: int = None):
         """
         Informationen zum Label abrufen
-        :param name: Name des Labels
-        :param type: page, blogpost, attachment, page_template
-        :param start: Offset für Ausgabe verknüpfter Inhalte
+        ### Rückgabewerte
+        * **name** Name des Labels
+        * **type** page, blogpost, attachment, page_template
+        * **start** Offset für Ausgabe verknüpfter Inhalte
         :para limit: Limit für Ausgabe verknüpfter Inhalte
         """
-        return self._processResponse(
-            self._callApi("label", self._params(locals()), apiVersion=1)
-        )
+        return self._processResponse(self._callApi("label", self._params(locals()), apiVersion=1))
 
 
 class AssetsApi(AtlassianCloud):
@@ -1288,9 +1353,7 @@ class AssetsApi(AtlassianCloud):
             workspace = ut.loads(response.text)
             self.workspaceId = workspace.values[0].workspaceId
             self.base_url2 = self.base_url
-            self.base_url = (
-                f"https://api.atlassian.com/jsm/assets/workspace/{self.workspaceId}/"
-            )
+            self.base_url = f"https://api.atlassian.com/jsm/assets/workspace/{self.workspaceId}/"
             self._api_urls = {
                 1: "v1/",
                 "assets": f"gateway/api/jsm/assets/workspace/{self.workspaceId}/v1/",
@@ -1312,28 +1375,31 @@ class AssetsApi(AtlassianCloud):
     def objectschemaList(self, startAt: int = None) -> Iterable:
         """
         Listet alle Objektschemata auf
-        :return: Iterable[Array von Objektschema-Objekten]
+        ### Rückgabewerte
+        *  Iterable[Array von Objektschema-Objekten]
         """
         yield from self._processResponsePaginated("objectschema/list", locals())
 
     def objectschemaGet(self, id: str):
         """
         Einzelnes Objektschema aufrufen
-        :param id: Objektschema-ID
-        :return: Objektschema-Objekt
+        ### Rückgabewerte
+        * **id** Objektschema-ID
+        ### Rückgabewerte
+        *  Objektschema-Objekt
         """
         return self._processResponse(self._callApi(f"objectschema/{id}"))
 
     def objectschemaObjecttypes(self, id: str, excludeAbstract: bool = False):
         """
         Objekttypen eines Objektschemas auflisten
-        :param id: Objektschema-ID
-        :param excludeAbstract: Abstrakte Objekttypen ausschließen aus der Auflistung
-        :return: Objekt {'entries':[je Objekttyp ein Objekt]}
+        ### Rückgabewerte
+        * **id** Objektschema-ID
+        * **excludeAbstract** Abstrakte Objekttypen ausschließen aus der Auflistung
+        ### Rückgabewerte
+        *  Objekt {'entries':[je Objekttyp ein Objekt]}
         """
-        return self._processResponse(
-            self._callApi(f"objectschema/{id}/objecttypes", locals())
-        )
+        return self._processResponse(self._callApi(f"objectschema/{id}/objecttypes", locals()))
 
     def objectschemaAttributes(
         self,
@@ -1344,15 +1410,14 @@ class AssetsApi(AtlassianCloud):
     ):
         """
         Sämtliche Attribute eines Objektschemas auflisten
-        :param id: Objektschema-ID
-        :param query: Suchausdruck zum Filtern der Ergebnisse anhand des Attribut-Namens
-        :param onlyValueEditable: Nur Werte ausgeben, die editierbar sind
-        :param extended: In jedem Attribut-Eintrag die Objekttyp-Struktur einbinden, zu der er gehört
-        :return: List[Attribut-Objekte]
+        * **id** Objektschema-ID
+        * **query** Suchausdruck zum Filtern der Ergebnisse anhand des Attribut-Namens
+        * **onlyValueEditable** Nur Werte ausgeben, die editierbar sind
+        * **extended** In jedem Attribut-Eintrag die Objekttyp-Struktur einbinden, zu der er gehört
+        ### Rückgabewerte
+        *  List[Attribut-Objekte]
         """
-        return self._processResponse(
-            self._callApi(f"objectschema/{id}/attributes", locals())
-        )
+        return self._processResponse(self._callApi(f"objectschema/{id}/attributes", locals()))
 
     def objecttypeAttributes(
         self,
@@ -1367,34 +1432,32 @@ class AssetsApi(AtlassianCloud):
     ):
         """
         Attribute eines Objekttypen auflisten
-        :param id: Objekttyp-ID
-        :param query: Suchausdruck zum Filtern der Ergebnisse anhand des Attribut-Namens
-        :param onlyValueEditable: Nur Werte ausgeben, die editierbar sind
-        :return: List[Attribut-Objekte]
+        ### Rückgabewerte
+        * **id** Objekttyp-ID
+        * **query** Suchausdruck zum Filtern der Ergebnisse anhand des Attribut-Namens
+        * **onlyValueEditable** Nur Werte ausgeben, die editierbar sind
+        ### Rückgabewerte
+        *  List[Attribut-Objekte]
         """
         return self._processResponse(self._callApi(f"objecttype/{id}/attributes"))
 
     def configRoleActors(self, roleId: str):
         """
         Berechtigte einer Konfigurations-Rolle (Object Schema Users/Developers/Managers) abrufen
-        :param id: ID der Konfigurations-Rolle
-        :return: {'id':id, 'actors':[Objekt je Berechtigten], ...}
+        * **id** ID der Konfigurations-Rolle
+        ### Rückgabewerte
+        *  {'id':id, 'actors':[Objekt je Berechtigten], ...}
         """
-        return self._processResponse(
-            self._callDirect(f"config/role/{roleId}", apiVersion="insight")
-        )
+        return self._processResponse(self._callDirect(f"config/role/{roleId}", apiVersion="insight"))
 
     def configRoleObjectschema(self, id: str):
         """
         Konfigurations-Rollen eines Objektschemas abrufen
-        :param id: Objectschema-ID
-        :return: {'Object Schema Users/Developers/Managers':{'id':id, 'actors':[Objekt je Berechtigten], ...}}
+        * **id** Objectschema-ID
+        ### Rückgabewerte
+        *  {'Object Schema Users/Developers/Managers':{'id':id, 'actors':[Objekt je Berechtigten], ...}}
         """
-        roles = ut.normalize(
-            self._processResponse(
-                self._callDirect(f"config/role/objectschema/{id}", apiVersion="assets")
-            )
-        )
+        roles = ut.normalize(self._processResponse(self._callDirect(f"config/role/objectschema/{id}", apiVersion="assets")))
         for role in roles:
             roles[role] = self.configRoleActors(roles[role].split("/")[-1])
         return roles
@@ -1402,14 +1465,11 @@ class AssetsApi(AtlassianCloud):
     def configRoleObjecttype(self, id: str):
         """
         Konfigurations-Rollen eines Objekttypen abrufen
-        :param id: Objekttyp-ID
-        :return: {'Object Schema Users/Developers/Managers':{'id':id, 'actors':[Objekt je Berechtigten], ...}}
+        * **id** Objekttyp-ID
+        ### Rückgabewerte
+        *  {'Object Schema Users/Developers/Managers':{'id':id, 'actors':[Objekt je Berechtigten], ...}}
         """
-        roles = ut.normalize(
-            self._processResponse(
-                self._callDirect(f"config/role/objecttype/{id}", apiVersion="assets")
-            )
-        )
+        roles = ut.normalize(self._processResponse(self._callDirect(f"config/role/objecttype/{id}", apiVersion="assets")))
         for role in roles:
             roles[role] = self.configRoleActors(roles[role].split("/")[-1])
         return roles
@@ -1422,10 +1482,11 @@ class AssetsApi(AtlassianCloud):
     ):
         """
         Konfigurations-Rollen aktualisieren
-        :param roleId: Konfigurations-Rollen-ID
-        :param userActors: Liste der accountIds
-        :param groupActors: Liste der Gruppen-Namen
-        :return: {'id':id, 'actors':[Objekt je Berechtigten], ...}
+        * **roleId** Konfigurations-Rollen-ID
+        * **userActors** Liste der accountIds
+        * **groupActors** Liste der Gruppen-Namen
+        ### Rückgabewerte
+        *  {'id':id, 'actors':[Objekt je Berechtigten], ...}
         """
         data = {
             "id": roleId,
@@ -1434,22 +1495,16 @@ class AssetsApi(AtlassianCloud):
                 "atlassian-user-role-actor": userActors,
             },
         }
-        return self._processResponse(
-            self._callDirect(
-                f"config/role/{roleId}", method="PUT", data=data, apiVersion="assets"
-            )
-        )
+        return self._processResponse(self._callDirect(f"config/role/{roleId}", method="PUT", data=data, apiVersion="assets"))
 
-    def objectAql(
-        self, qlQuery: str, includeAttributes: bool = True, maxResults: int = 25
-    ) -> Iterable:
+    def objectAql(self, qlQuery: str, includeAttributes: bool = True, maxResults: int = 25) -> Iterable:
         """
         Objekte anhand einer AQL abrufen
-        :param qlQuery: AQL
-        :param includeAttributes: Objekt-Attribute mit anzeigen
-        :param maxResults: Wie viele Ergebnisse sollen angezeigt werden
-        :return: Iterable[Objekte]
+        ### Rückgabewerte
+        * **qlQuery** AQL
+        * **includeAttributes** Objekt-Attribute mit anzeigen
+        * **maxResults** Wie viele Ergebnisse sollen angezeigt werden
+        ### Rückgabewerte
+        *  Iterable[Objekte]
         """
-        yield from self._processResponsePaginated(
-            "object/aql", locals(), data={"qlQuery": qlQuery}, method="POST"
-        )
+        yield from self._processResponsePaginated("object/aql", locals(), data={"qlQuery": qlQuery}, method="POST")
