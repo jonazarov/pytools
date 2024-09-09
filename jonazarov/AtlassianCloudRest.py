@@ -1,4 +1,5 @@
-import requests, time, inspect, json, pathlib, re
+import requests, time, json, pathlib, re, sys
+from os.path import dirname
 from bs4 import BeautifulSoup as bs
 from typing import List, Callable, Iterable
 from types import SimpleNamespace
@@ -19,7 +20,12 @@ def loadAtlassianAuth(configfile: str | None = None) -> SimpleNamespace:
     * `SimpleNamespace` Ausgelesene, normalisierte Konfiguration
     """
     if configfile == None:
-        p = pathlib.Path(inspect.stack()[1][1]).parent.resolve()
+        p = None
+        if getattr(sys, "frozen", False):
+            p = dirname(sys.executable)
+        else:
+            import inspect
+            p = dirname(inspect.stack()[1][1])
         configfile = f"{p}\\config.json"
     config = ut.getconfig(
         {
@@ -567,19 +573,21 @@ class JiraApi(AtlassianCloud):
         oldAccountIds: List[str] = None,
         groupId: str = None,
         groupname: str = None,
+        includeInactiveUsers: bool = False,
     ):
         """
         Benutzer einer Gruppe setzen
         ### Rückgabewerte
         * **setAccountIds** Account-IDs der Benutzer, die in der Gruppe verbleiben/hinzugefügt werden wollen
-        * **oldAccountIds** Account-IDs der aktuellen Benutzer der Gruppe
+        * **oldAccountIds** Account-IDs der Benutzer, die aus der Gruppe entfernt werden sollen; wenn nichts angegeben, werden alle aktuellen Nutzer entfernt
         * **groupId** ID der Gruppe
         * **groupname** Name der Gruppe [deprecated]
+        * **includeInactiveUsers** Inaktive Benutzer sollen beibehalten werden
         """
         if groupId == None and groupname == None:
             raise ValueError("groupId oder groupname sollen gesetzt sein")
         if oldAccountIds == None:
-            oldAccountIds = [m.accountId for m in list(self.groupMember(groupId, groupname))]
+            oldAccountIds = [m.accountId for m in list(self.groupMember(groupId, groupname, includeInactiveUsers))]
         # neue hinzufügen
         for accountId in setAccountIds:
             if accountId not in oldAccountIds:
@@ -588,6 +596,23 @@ class JiraApi(AtlassianCloud):
         for accountId in oldAccountIds:
             if accountId not in setAccountIds:
                 self.groupUserDel(accountId, groupId, groupname)
+
+    def groupUsersAdd(
+        self,
+        setAccountIds: List[str],
+        groupId: str = None,
+        groupname: str = None,
+        includeInactiveUsers: bool = False,
+    ):
+        """
+        Gruppe um bestimmte Benutzer ergänzen
+        ### Rückgabewerte
+        * **setAccountIds** Account-IDs der Benutzer, die zur Gruppe hinzugefügt werden wollen
+        * **groupId** ID der Gruppe
+        * **groupname** Name der Gruppe [deprecated]
+        * **includeInactiveUsers** Inaktive Benutzer mit aufzählen
+        """
+        self.groupUsersSet(setAccountIds, [], groupId, groupname, includeInactiveUsers)
 
     def filterMy(self, expand: str = None, includeFavourites: bool = False):
         """
