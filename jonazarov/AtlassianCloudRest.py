@@ -1,5 +1,4 @@
-import requests, time, json, pathlib, re, sys
-from os.path import dirname
+import requests, time, re
 from bs4 import BeautifulSoup as bs
 from typing import List, Callable, Iterable
 from types import SimpleNamespace
@@ -10,26 +9,26 @@ from urllib.parse import urlparse, parse_qs
 from prompt_toolkit.shortcuts import message_dialog
 
 
-def loadAtlassianAuth(configfile: str | None = None) -> SimpleNamespace:
+def loadAtlassianAuth(configfile: str | None = None, seperateJC: bool = False) -> SimpleNamespace:
     """Lädt die Konfiguration aus der Konfigurationsdatei mithilfe einer Standard-Definition und versucht einen Login an der REST-API
 
     ### Parameter
     * **configfile `str | None` (default None)** Dateiname der Konfigurationsdatei. Wenn nichts angegeben, wird nach _config.json_ im Verzeichnis des aufrufenden Skripts gesucht
+    * **seperateJC `bool` (Default False)** base-URLs zwischen Jira und Confluence separat speichern
 
     ### Rückgabewerte
     * `SimpleNamespace` Ausgelesene, normalisierte Konfiguration
     """
-    if configfile == None:
-        p = None
-        if getattr(sys, "frozen", False):
-            p = dirname(sys.executable)
-        else:
-            import inspect
-            p = dirname(inspect.stack()[1][1])
-        configfile = f"{p}\\config.json"
+    if not seperateJC:
+        config_base_urls = "Bitte Cloud-Instanzen durch Kommata getrennt eingeben (Subdomains ausreichend):"
+    else:
+        config_base_urls = {
+            "confluence": "Bitte Cloud-Instanzen für Confluence durch Kommata getrennt eingeben (Subdomains ausreichend):",
+            "jira": "Bitte Cloud-Instanzen für Jira durch Kommata getrennt eingeben (Subdomains ausreichend):",
+        }
     config = ut.getconfig(
         {
-            "base_urls": "Bitte Cloud-Instanzen durch Kommata getrennt eingeben (Subdomains ausreichend):",
+            "base_urls": config_base_urls,
             "orgadmin": {
                 "user": "Bitte Benutzernamen des Admins eingeben:",
                 "token": "Bitte API-Token des Admins eingeben:",
@@ -38,53 +37,70 @@ def loadAtlassianAuth(configfile: str | None = None) -> SimpleNamespace:
         configfile,
     )
 
-    def url_normalize(url: str) -> str:
-        """Atlassian-URL normalisieren
+    def baseurl_normalize(base_urls: str | List[str]) -> List[str] | None:
+        """Atlassian-URLs normalisieren
 
         ### Parameter
-        * **url `str`** Eingangs-URL
+        * **base_urls `str`** Eingangs-URLs
 
         ### Rückgabewert
-        * `str`
+        * `dict | List[str] | None`
         """
-        url = url.strip().replace("https://", "").replace("http://", "").replace(".atlassian.net/", "").replace(".atlassian.net", "")
-        if not re.match(r"^[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?$", url):
+        if type(base_urls) is str:
+            base_urls = base_urls.split(",")
+        for i in range(len(base_urls)):
+            url = base_urls[i]
+            url = url.strip().replace("https://", "").replace("http://", "").replace(".atlassian.net/", "").replace(".atlassian.net", "")
+            if not re.match(r"^[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?$", url):
+                base_urls[i] = None
+            else:
+                base_urls[i] = f"https://{url}.atlassian.net/"
+        base_urls = [url for url in base_urls if url]
+        if not len(base_urls):
             return None
-        return f"https://{url}.atlassian.net/"
+        return base_urls
+        
+    retry = False
+    if not seperateJC:
+        config.base_urls = baseurl_normalize(config.base_urls)
+        if config.base_urls == None:
+            delattr(config, 'base_urls')
+            retry = True
+    else:
+        config.base_urls = ut.normalize(config.base_urls)
+        for dest in config.base_urls:
+            config.base_urls[dest] = baseurl_normalize(config.base_urls[dest])
+            if config.base_urls[dest] == None:
+                del config.base_urls[dest]
+                retry = True
+        config.base_urls = ut.simplifize(config.base_urls)
 
-    if type(config.base_urls) is str:
-        config.base_urls = config.base_urls.split(",")
-    config.base_urls = list(map(url_normalize, config.base_urls))
-    config.base_urls = [url for url in config.base_urls if url]
-    if not len(config.base_urls):
-        config = ut.normalize(config)
-        del config["base_urls"]
-        with open(configfile, "w", encoding="utf-8") as file:
-            json.dump(config, file, indent=3)
+    ut.setconfig(config)
+    if retry:
         return loadAtlassianAuth(configfile)
 
-    jira = JiraApi(config.orgadmin.user, config.orgadmin.token, config.base_urls[0])
+    if not seperateJC:
+        jira = JiraApi(config.orgadmin.user, config.orgadmin.token, config.base_urls[0])
+    else:
+        jira = JiraApi(config.orgadmin.user, config.orgadmin.token, config.base_urls.jira[0])
     try:
         u = jira.usersGetByName(config.orgadmin.user)
         if u == []:
             message_dialog("Fehler bei der Authentifizierung", "Die angegebenen Authentifizierungsdaten scheinen ungültig zu sein! Bitte Eingaben wiederholen!", "OK", ut.pt_style).run()
             config = ut.normalize(config)
             del config["orgadmin"]
-            with open(configfile, "w") as file:
-                json.dump(config, file, ensure_ascii=False, indent=3)
+            ut.setconfig(config)
             return loadAtlassianAuth(configfile)
     except objectNotExists as e:
         message_dialog("Fehler bei der Anmeldung", "Die angegebene Cloud-Instanz kann nicht erreicht werden! Bitte Eingaben wiederholen!", "OK", ut.pt_style).run()
         config = ut.normalize(config)
         del config["base_urls"]
-        with open(configfile, "w", encoding="utf-8") as file:
-            json.dump(config, file, indent=3)
+        ut.setconfig(config)
         return loadAtlassianAuth(configfile)
     _config = ut.normalize(config)
     _config["orgadmin"]["accountId"] = u[0].accountId
     config = ut.simplifize(_config)
-    with open(configfile, "w", encoding="utf-8") as file:
-        json.dump(ut.normalize(config), file, ensure_ascii=False, indent=3)
+    ut.setconfig(config)
     return config
 
 
@@ -361,6 +377,10 @@ class AtlassianCloud:
                 resultarray = results if subobject == None else getattr(results, subobject)
                 for result in getattr(resultarray, resultsKey):
                     yield result
+
+    def _notFoundStatus(r):
+        if r.status_code == 404:
+            return None
 
 
 class JiraApi(AtlassianCloud):
@@ -1055,13 +1075,28 @@ class ConfluenceApi(AtlassianCloud):
         self._api_urls = {2: "wiki/api/v2/", 1: "wiki/rest/api/"}
         self._api_version = 2
 
-    def _processResponsePaginated(self, call: str, params: dict = None, resultsKey: str = "results"):
+    def _processResponsePaginated(self, call: str, params: dict = None, resultsKey: str = "results", apiVersion: int | str | None = None) -> Iterable | None:
+        """Rückgabe eines seitenweise operierenden API-Aufrufs (GET) verarbeiten
+
+        ### Parameter
+        * **call `str`** URL des Aufrufs (nach "wiki/api/v2/" bzw. "wiki/rest/api/")
+        * **params `dict` (Default None)** Aufruf-Parameter
+        * **resultsKey `str` (Default "results")** Wie heißt die Eigenschaft des Rückgabe-JSONs, in dem die Ergebnisse erwartet werden?
+        * **apiVersion `int | str | None` (Default None)** API-Version
+
+        ### Fehler-Behandlungen:
+            Exception: Cursor wurde nicht gefunden
+
+        ### Rückgabewerte
+        * `None`, wenn keine Ergebnisse vorhanden
+        * `Iterable`, sofern Ergebnisse vorliegen
+        """
         limit = None if "limit" not in params else params["limit"]
         if limit == None:
             params["limit"] = 25
         elif limit > 250:
             params["limit"] = 250
-        results = self._processResponse(self._callApi(call, params))
+        results = self._processResponse(self._callApi(call, params, apiVersion=apiVersion))
         totalCount = 0
         if results == None:
             return None
@@ -1080,12 +1115,44 @@ class ConfluenceApi(AtlassianCloud):
                 raise Exception("Cursor nicht gefunden! ")
             if limit != None and totalCount + count > limit:
                 params["limit"] = count - (totalCount + count - limit)
-            results = self._processResponse(self._callApi(call, params))
+            results = self._processResponse(self._callApi(call, params, apiVersion=apiVersion))
             if results == None:
                 return None
             else:
                 for result in getattr(results, resultsKey):
                     yield result
+
+    def search(
+        self,
+        cql: str,
+        cqlcontext: dict | None = None,
+        limit: int | None = 25,
+        start: int = 0,
+        includeArchivedSpaces: bool = False,
+        excludeCurrentSpaces: bool = False,
+        excerpt: str  = "highlight",
+        sitePermissionTypeFilter: str = "none",
+        ) -> Iterable | None:
+        """CQL-Suche ausführen
+
+        ### Parameter
+        * **cql `str`** CQL-Suchausdruck (https://developer.atlassian.com/cloud/confluence/advanced-searching-using-cql/)
+        * **cqlcontext `dict | None` (Default None)** Bereich, Content und Content-Status für die Suche.
+            * `spaceKey` [optional] Bereichs-Schlüssel, in dem gesucht werden soll
+            * `contentId` ID des Contents, in dem gesucht werden soll (muss im Bereich `spaceKey` liegen)
+            * `contentStatuses` [optional] Content-Status, nach denen gesucht werden soll
+        * **limit `int | None` (Default 25)** Nach wie vielen Ergebnissen soll die Suche abgebrochen werden?
+        * **start `int | None` (Default 0)** Such-Offset
+        * **includeArchivedSpaces `bool` (Default False)** Archivierte Bereiche auch durchsuchen
+        * **excludeCurrentSpaces `bool` (Default False)** Aktuelle (d.h. nicht-archivierte) Bereiche von der Suche ausschließen
+        * **excerpt `str` (Default "highlight")** Auszugs-Strategie im Suchergebnis, eins von `highlight`, `indexed`, `none`, `highlight_unescaped`, `indexed_unescaped`
+        * **sitePermissionTypeFilter `str` (Default "none")**
+
+        ### Rückgabewerte
+        * `None`, wenn keine Ergebnisse vorhanden
+        * `Iterable`, sofern Ergebnisse vorliegen
+        """
+        yield from self._processResponsePaginated("search", locals(), apiVersion=1)
 
     def pages(
         self,
@@ -1267,22 +1334,63 @@ class ConfluenceApi(AtlassianCloud):
         id: int,
         version: int = None,
         get_draft: bool = False,
+        status: str = None,
         body_format: str = "storage",
         serialize_ids_as_strings: bool = False,
     ):
         """
-        Einzelne Seite samt Informationen ausgeben
-        ### Rückgabewerte
-        * **id:
-        * **version:
-        * **get_draft:
-        * **body_format: storage oder atlas_doc_format
+        Einzelne Seite samt Informationen abrufen
+        ### Parameter
+        * **id `int`** ID der Seite
+        * **version `int` (Default None)** Nummer der dedizierten Version. Wenn nicht angegeben, aktuelle
+        * **get_draft `bool` (Default False)** Entwurf abrufen
+        * **status `str`(Default None)** Mögliche Status im Ergebnis; mehrere Werte per Komma verketten. Status: `current`, `trashed`, `deleted`, `draft`
+        * **body_format `str`** storage oder atlas_doc_format
         ### Rückgabewerte
         * 
         """
         params = locals()
         del params["id"]
-        return self._processResponse(self._callApi(f"pages/{id}", self._params(params)))
+        return self._processResponse(self._callApi(f"pages/{id}", self._params(params)), catchCodes=[404], catchClosure=self._notFoundStatus)
+    
+    def blogpost(
+        self,
+        id: int,
+        version: int = None,
+        get_draft: bool = False,
+        status: str = None,
+        body_format: str = "storage",
+        serialize_ids_as_strings: bool = False,
+    ):
+        """
+        Einzelnen Blogpost samt Informationen abrufen
+        ### Parameter
+        * **id `int`** ID der Seite
+        * **version `int` (Default None)** Nummer der dedizierten Version. Wenn nicht angegeben, aktuelle
+        * **get_draft `bool` (Default False)** Entwurf abrufen
+        * **status `str`(Default None)** Mögliche Status im Ergebnis; mehrere Werte per Komma verketten. Status: `current`, `trashed`, `deleted`, `historical`, `draft`
+        * **body_format `str`** storage oder atlas_doc_format
+        ### Rückgabewerte
+        * 
+        """
+        params = locals()
+        del params["id"]
+        return self._processResponse(self._callApi(f"blogposts/{id}", self._params(params)), catchCodes=[404], catchClosure=self._notFoundStatus)
+    
+    def space(
+        self,
+        id: int,
+    ):
+        """
+        Einzelnen Bereich samt Informationen abrufen
+        ### Parameter
+        * **id `int`** ID der Seite
+        ### Rückgabewerte
+        * 
+        """
+        params = locals()
+        del params["id"]
+        return self._processResponse(self._callApi(f"spaces/{id}", self._params(params)), catchCodes=[404], catchClosure=self._notFoundStatus)
 
     def pageLabels(
         self,
@@ -1290,7 +1398,7 @@ class ConfluenceApi(AtlassianCloud):
         prefix: str = None,
     ):
         """
-        Labels einer einzelnen Seite ausgeben
+        Labels einer einzelnen Seite abrufen
         ### Rückgabewerte
         * **id** Page-ID
         * **prefix** my, team, global, system als mögliche Werte

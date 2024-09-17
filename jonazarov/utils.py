@@ -1,6 +1,7 @@
-import json, pathlib, inspect
+import json, codecs, sys, time
+from os.path import dirname
 from types import SimpleNamespace
-from prompt_toolkit.shortcuts import input_dialog
+from prompt_toolkit.shortcuts import input_dialog, yes_no_dialog
 from prompt_toolkit.styles import Style
 
 
@@ -9,10 +10,6 @@ class NamespaceEncoder(json.JSONEncoder):
         if isinstance(o, (list, tuple)):
             return super(NamespaceEncoder, self).iterencode(o)
         return o.__dict__
-
-
-import codecs, sys, time
-
 
 class Unbuffered:
     def __init__(self, logfile, stream):
@@ -44,14 +41,19 @@ def confunpack(confdef: dict, config: dict, pt_style: Style = None) -> dict:
     for entry in confdef:
         # Wenn Endpunkt erreicht, Daten per Dialog anfordern
         if type(confdef[entry]) is str:
-            if not entry in config:
-                config[entry] = ""
-                while config[entry] == "":
-                    config[entry] = input_dialog(title="Fehlende Konfigurations-Informationen ergänzen", cancel_text="Abbruch", text=confdef[entry], style=pt_style).run()
-                if config[entry] == None:
-                    sys.exit()
+            centry = entry if not str(entry).endswith('?') else entry[:-1]
+            if not centry in config:
+                if str(entry).endswith('?'):
+                    config[centry] = yes_no_dialog(title="Fehlende Konfigurations-Informationen ergänzen", yes_text="Ja", no_text="Nein", text=confdef[entry], style=pt_style).run()
+                else:
+                    config[centry] = ""
+                    while config[centry] == "":
+                        config[centry] = input_dialog(title="Fehlende Konfigurations-Informationen ergänzen", cancel_text="Abbruch", text=confdef[entry], style=pt_style).run()
+                    if config[centry] == None:
+                        sys.exit()
+        # Wenn Unterpunkt
         else:
-            if not entry in config:
+            if not entry in config or not (type(config[entry]) is dict):
                 config[entry] = {}
             config[entry] = confunpack(confdef[entry], config[entry])
     return config
@@ -61,11 +63,11 @@ class Utils:
     pt_style = Style.from_dict(
         {
             "dialog": "bg:#94D5E4",
-            "dialog frame.label": "bg:#e30613 #173861",
-            "dialog.body": "bg:#009FE3 #e30613",
+            "dialog frame.label": "bg:#e30613 #FFFFFF",
+            "dialog.body": "bg:#009FE3 #173861",
             "dialog shadow": "bg:#3C9CB2",
-            "dialog button": "bg:#e30613 #173861",
-            "dialog button.focused": "bg:#E30613",
+            "dialog button": "bg:#e30613 #FFFFFF",
+            "dialog button.focused": "bg:#173861 #e30613",
             "dialog checkbox-checked": "bg:#E30613",
             "dialog checkbox-selected": "bg:#ff8288",
         }
@@ -153,14 +155,14 @@ class Utils:
         * File-Objekt, falls `manual == True`
         """
         if filename == None:
-            filename = str(pathlib.Path(inspect.stack()[1][1]).resolve())
+            import inspect
+            filename = inspect.stack()[len(inspect.stack())-1][1]
         now = time.localtime()
         logfilename = filename + time.strftime(".%Y-%m-%d.log", now)
         logfile = codecs.open(logfilename, "a", encoding="utf-8")
         logfile.write("NewLogEntry " + time.strftime("%Y-%m-%d %H:%M:%S", now) + "\n")
-        if manual:
-            return logfile
         sys.stdout = Unbuffered(logfile, sys.stdout)
+        return logfile
 
     def logline(logfile, *values: str, sep: str | None = " ", end: str | None = "\n"):
         """Einzelne Zeile in Logdatei manuell schreiben
@@ -178,24 +180,58 @@ class Utils:
         if logfile != None:
             print(*values, sep=sep, end=end)
             logfile.write(sep.join(values) + end)
+            logfile.flush()
 
-    def getconfig(confdef: dict, conffile: str) -> SimpleNamespace:
+    def _conffile(configfile: str | None = None) -> str:
+        """Namen der Konfigurationsdatei bestimmen (wenn nichts angegeben, wird eine config.json im Unterverzeichnis der aufrufenden Datei angenommen)
+
+        ### Parameter
+        * **conffile `str | None` (Default None)** Dateiname der Konfigurationsdatei
+
+        ### Rückgabewerte
+        * `str`
+        """
+        if configfile == None:
+            p = None
+            if getattr(sys, "frozen", False):
+                p = dirname(sys.executable)
+            else:
+                import inspect
+                p = dirname(inspect.stack()[len(inspect.stack())-1][1])
+            configfile = f"{p}\\config.json"
+            return configfile
+        return configfile
+
+    def getconfig(confdef: dict, conffile: str | None = None) -> SimpleNamespace:
         """Konfigurationsdatei auslesen, anhand der Konfigiurationsdefinition befüllen und als SimpleNamespace ausgeben
 
         ### Parameter
         * **confdef `dict`** Konfigurations-Definition, Key entsprechend der Eigenschaft in der Konfigurationsdatei, Wert entsprechend der Beschreibung für Anforderungs-Dialog; Verschachtelung möglich
-        * **conffile `str`** Dateiname der Konfigurationsdatei
+        * **conffile `str | None` (Default None)** Dateiname der Konfigurationsdatei
 
         ### Rückgabewerte
         * `SimpleNamespace` Fertig ausgelesene Konfiguration
         """
+        conffile = Utils._conffile(conffile)
         config = {}
-        with open(conffile, "r", encoding="utf-8") as file:
+        with open(conffile, "a+", encoding="utf-8") as file:
+            file.seek(0)
             try:
                 config = json.load(file)
             except:
                 pass
         return Utils.simplifize(confunpack(confdef, config, Utils.pt_style))
+    
+    def setconfig(config: SimpleNamespace | dict, conffile: str | None = None):
+        """Konfigurationsdatei (über)schreiben
+
+        ### Parameter
+        * **config `SimpleNamespace | dict`** Zu schreibende Konfiguration
+        * **conffile `str | None` (Default None)** Dateiname der Konfigurationsdatei
+        """
+        conffile = Utils._conffile(conffile)
+        with open(conffile, "w", encoding="utf-8") as file:
+            json.dump(Utils.normalize(config), file, indent=3, ensure_ascii=False)
 
 
 def lprint(logfile, *values: str, sep: str | None = " ", end: str | None = "\n"):
