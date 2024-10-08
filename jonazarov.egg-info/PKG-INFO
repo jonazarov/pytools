@@ -1,7 +1,7 @@
 Metadata-Version: 2.1
 Name: jonazarov
-Version: 0.1.11
-Summary: Verschiedene Python-Tools, vor allem für Atlassian Cloud
+Version: 0.1.12
+Summary: Verschiedene Python-Tools, u.a. für: Atlassian-Cloud, HRworks-API
 Home-page: https://github.com/jonazarov/pytools
 Author: Johannes Nazarov
 Author-email: johannes.nazarov+dev@gmail.com
