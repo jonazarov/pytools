@@ -182,6 +182,13 @@ class Utils:
             logfile.write(sep.join(values) + end)
             logfile.flush()
 
+    def callerRoot():
+        if getattr(sys, "frozen", False):
+            return dirname(sys.executable)
+        else:
+            import inspect
+            return dirname(inspect.stack()[len(inspect.stack())-1][1])
+
     def _conffile(configfile: str | None = None) -> str:
         """Namen der Konfigurationsdatei bestimmen (wenn nichts angegeben, wird eine config.json im Unterverzeichnis der aufrufenden Datei angenommen)
 
@@ -192,12 +199,7 @@ class Utils:
         * `str`
         """
         if configfile == None:
-            p = None
-            if getattr(sys, "frozen", False):
-                p = dirname(sys.executable)
-            else:
-                import inspect
-                p = dirname(inspect.stack()[len(inspect.stack())-1][1])
+            p = Utils.callerRoot()
             configfile = f"{p}\\config.json"
             return configfile
         return configfile
