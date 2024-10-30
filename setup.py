@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='jonazarov',
-    version='0.1.12',    
+    version='0.1.13',    
     description='Verschiedene Python-Tools, u.a. für: Atlassian-Cloud, HRworks-API',
     url='https://github.com/jonazarov/pytools',
     author='Johannes Nazarov',

@@ -1,5 +1,5 @@
-import json, codecs, sys, time
-from os.path import dirname
+import json, codecs, sys, time, re
+from os import path
 from types import SimpleNamespace
 from prompt_toolkit.shortcuts import input_dialog, yes_no_dialog
 from prompt_toolkit.styles import Style
@@ -154,9 +154,7 @@ class Utils:
         ### Rückgabewerte
         * File-Objekt, falls `manual == True`
         """
-        if filename == None:
-            import inspect
-            filename = inspect.stack()[len(inspect.stack())-1][1]
+        filename = filename or Utils.caller()
         now = time.localtime()
         logfilename = filename + time.strftime(".%Y-%m-%d.log", now)
         logfile = codecs.open(logfilename, "a", encoding="utf-8")
@@ -182,12 +180,16 @@ class Utils:
             logfile.write(sep.join(values) + end)
             logfile.flush()
 
+    def caller():
+        import inspect
+        return inspect.stack()[len(inspect.stack())-1][1]
+
     def callerRoot():
         if getattr(sys, "frozen", False):
-            return dirname(sys.executable)
+            return path.dirname(sys.executable)
         else:
             import inspect
-            return dirname(inspect.stack()[len(inspect.stack())-1][1])
+            return path.dirname(inspect.stack()[len(inspect.stack())-1][1])
 
     def _conffile(configfile: str | None = None) -> str:
         """Namen der Konfigurationsdatei bestimmen (wenn nichts angegeben, wird eine config.json im Unterverzeichnis der aufrufenden Datei angenommen)
@@ -234,6 +236,29 @@ class Utils:
         conffile = Utils._conffile(conffile)
         with open(conffile, "w", encoding="utf-8") as file:
             json.dump(Utils.normalize(config), file, indent=3, ensure_ascii=False)
+
+    def merge_utf8_files(input_files, output_file):
+        with open(output_file, 'w', encoding='utf-8') as outfile:
+            for filename in input_files:
+                if path.exists(filename):
+                    with open(filename, 'r', encoding='utf-8') as infile:
+                        for line in infile:
+                            outfile.write(line)
+                else:
+                    print(f"Warnung: Datei {filename} nicht gefunden.")
+
+    def valid_html_id(input_string:str) -> str:
+        # Entferne alle Zeichen, die nicht erlaubt sind
+        valid_chars = re.sub(r'[^a-zA-Z0-9-_:]', '', input_string)
+        
+        # Stelle sicher, dass der String mit einem Buchstaben beginnt
+        if not valid_chars or not valid_chars[0].isalpha():
+            valid_chars = 'id_' + valid_chars
+        
+        # Ersetze verbleibende Leerzeichen durch Unterstriche
+        valid_id = valid_chars.replace(' ', '_')
+        
+        return valid_id
 
 
 def lprint(logfile, *values: str, sep: str | None = " ", end: str | None = "\n"):
