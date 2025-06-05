@@ -217,7 +217,7 @@ class AtlassianCloud:
             method,
             (self.base_url if alternateBase == None else alternateBase) + "/" + self._api_urls[apiVersion if apiVersion != None else self._api_version] + call,
             params=params,
-            data=ut.dumps(data),
+            data=(None if method in ("GET") else ut.dumps(data)),
             headers=(headers if method in ("GET") else headers | {"Content-Type": "application/json"}),
             auth=self.auth,
         )
