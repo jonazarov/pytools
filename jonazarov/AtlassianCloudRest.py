@@ -31,11 +31,30 @@ def loadAtlassianAuth(configfile: str | None = None, seperateJC: bool = False) -
             "base_urls": config_base_urls,
             "orgadmin": {
                 "user": "Bitte Benutzernamen des Admins eingeben:",
-                "token": "Bitte API-Token des Admins eingeben:",
             },
         },
         configfile,
     )
+
+    if (not (hasattr(config.orgadmin, 'token') or (hasattr(config.orgadmin, 'tokenJira') and hasattr(config.orgadmin, 'tokenConfluence')))):
+        ut.setconfig(config, configfile)
+        config = ut.getconfig(
+            {
+                "base_urls": config_base_urls,
+                "orgadmin": {
+                    "user": "Bitte Benutzernamen des Admins eingeben:",
+                    "tokenJira": "Bitte API-Token des Admins für Jira-Zugriff eingeben:",
+                    "tokenConfluence": "Bitte API-Token des Admins für Confluence-Zugriff eingeben:",
+                },
+            },
+            configfile,
+        )
+    elif (hasattr(config.orgadmin, 'token')):
+        config = ut.normalize(config)
+        config['orgadmin']['tokenJira'] = config['orgadmin']['token']
+        config['orgadmin']['tokenConfluence'] = config['orgadmin']['token']
+        del config['orgadmin']['token']
+        config = ut.simplifize(config)
 
     def baseurl_normalize(base_urls: str | List[str]) -> List[str] | None:
         """Atlassian-URLs normalisieren
@@ -75,16 +94,16 @@ def loadAtlassianAuth(configfile: str | None = None, seperateJC: bool = False) -
                 retry = True
         config.base_urls = ut.simplifize(config.base_urls)
 
-    ut.setconfig(config)
+    ut.setconfig(config, configfile)
     if retry:
         return loadAtlassianAuth(configfile)
 
     if not seperateJC:
-        jira = JiraApi(config.orgadmin.user, config.orgadmin.token, config.base_urls[0])
+        jira = JiraApi(config.orgadmin.user, config.orgadmin.tokenJira, config.base_urls[0])
     else:
-        jira = JiraApi(config.orgadmin.user, config.orgadmin.token, config.base_urls.jira[0])
+        jira = JiraApi(config.orgadmin.user, config.orgadmin.tokenJira, config.base_urls.jira[0])
     try:
-        u = jira.usersGetByName(config.orgadmin.user)
+        u = jira.usersGetByEmail(config.orgadmin.user)
         if u == []:
             message_dialog("Fehler bei der Authentifizierung", "Die angegebenen Authentifizierungsdaten scheinen ungültig zu sein! Bitte Eingaben wiederholen!", "OK", ut.pt_style).run()
             config = ut.normalize(config)
@@ -424,6 +443,16 @@ class JiraApi(AtlassianCloud):
         """
         users = self.userSearch(query=displayName)
         return list(filter(lambda u: u.displayName == displayName, users))
+    
+    def usersGetByEmail(self, emailAddress: str = None):
+        """
+        Nach Jira-User anhand des displayNamens suchen
+        * **emailAddress:
+        ### Rückgabewerte
+        * 
+        """
+        users = self.userSearch(query=emailAddress)
+        return list(filter(lambda u: u.emailAddress == emailAddress, users))
 
     def userGroups(self, accountId: str):
         """

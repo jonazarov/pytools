@@ -16,4 +16,6 @@ deploy.bat
 upload.bat
 # Installation der produktiven Packages
 pip install jonazarov -U
+# Falls das nicht greift:
+pip install jonazarov -U  --upgrade-strategy "eager"
 ```
